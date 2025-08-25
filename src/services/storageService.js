@@ -28,7 +28,7 @@ export function initializeStorage() {
       storageConfig.projectId = config.gcs.projectId;
     }
 
-    storage = new Storage(storageConfig);
+  storage = new Storage(storageConfig);
     logger.info('Google Cloud Storage initialized');
     return storage;
   } catch (err) {
@@ -42,6 +42,7 @@ export function initializeStorage() {
  * Upload buffer to GCS with organized folder structure
  */
 export async function uploadBuffer({ buffer, filename, contentType, folder = 'media', roomId = null, phoneNumber = null }) {
+  if (!storage && !useLocalStorage) initializeStorage();
   const fileId = uuidv4();
   const extension = path.extname(filename || '') || getExtensionFromMimeType(contentType);
   
@@ -74,12 +75,9 @@ export async function uploadBuffer({ buffer, filename, contentType, folder = 'me
 
   try {
     await file.save(buffer, metadata);
-    
-    // Generate signed URL for access (valid for 7 days)
-    const [url] = await file.getSignedUrl({
-      action: 'read',
-      expires: Date.now() + 7 * 24 * 60 * 60 * 1000 // 7 days
-    });
+
+    // Decide URL strategy
+    const url = await resolvePublicUrl(file, gcsFilename, { contentType });
 
     logger.info({ gcsFilename, originalName: filename }, 'File uploaded to GCS');
 
@@ -102,7 +100,7 @@ export async function uploadBuffer({ buffer, filename, contentType, folder = 'me
  * Upload stream to GCS with organized folder structure
  */
 export async function uploadStream({ stream, filename, contentType, folder = 'media', roomId = null, phoneNumber = null }) {
-  if (!storage) initializeStorage();
+  if (!storage && !useLocalStorage) initializeStorage();
 
   const bucket = storage.bucket(config.gcs.bucketName);
   const fileId = uuidv4();
@@ -138,13 +136,8 @@ export async function uploadStream({ stream, filename, contentType, folder = 'me
     writeStream.on('finish', async () => {
       try {
         // Get file metadata to determine size
-        const [metadata] = await file.getMetadata();
-        
-        // Generate signed URL
-        const [url] = await file.getSignedUrl({
-          action: 'read',
-          expires: Date.now() + 7 * 24 * 60 * 60 * 1000
-        });
+        const [meta] = await file.getMetadata();
+        const url = await resolvePublicUrl(file, gcsFilename, { contentType });
 
         logger.info({ gcsFilename, originalName: filename }, 'File streamed to GCS');
 
@@ -153,7 +146,7 @@ export async function uploadStream({ stream, filename, contentType, folder = 'me
           gcsFilename,
           originalFilename: filename,
           contentType,
-          size: parseInt(metadata.size),
+          size: parseInt(meta.size),
           url,
           bucket: config.gcs.bucketName
         });
@@ -189,21 +182,33 @@ export async function deleteFile(gcsFilename) {
  * Generate a new signed URL for an existing file
  */
 export async function generateSignedUrl(gcsFilename, expiresInDays = 7) {
-  if (!storage) initializeStorage();
+  if (!storage && !useLocalStorage) initializeStorage();
 
   const bucket = storage.bucket(config.gcs.bucketName);
   const file = bucket.file(gcsFilename);
 
   try {
+    // Honor config to disable signing or use auto with fallback
+    if (config.gcs.urlSigning === 'disabled') {
+      return buildPublicUrl(gcsFilename);
+    }
+
     const [url] = await file.getSignedUrl({
       action: 'read',
       expires: Date.now() + expiresInDays * 24 * 60 * 60 * 1000
     });
-
     return url;
   } catch (err) {
-    logger.error({ err, gcsFilename }, 'Failed to generate signed URL');
-    throw err;
+    logger.warn({ err: err?.message, gcsFilename }, 'Signed URL failed, attempting public URL fallback');
+    try {
+      // Try makePublic if allowed
+      if (config.gcs.makePublic) {
+        await file.makePublic();
+      }
+    } catch (pubErr) {
+      logger.warn({ err: pubErr?.message }, 'makePublic failed');
+    }
+    return buildPublicUrl(gcsFilename);
   }
 }
 
@@ -211,7 +216,7 @@ export async function generateSignedUrl(gcsFilename, expiresInDays = 7) {
  * Check if file exists in GCS
  */
 export async function fileExists(gcsFilename) {
-  if (!storage) initializeStorage();
+  if (!storage && !useLocalStorage) initializeStorage();
 
   const bucket = storage.bucket(config.gcs.bucketName);
   const file = bucket.file(gcsFilename);
@@ -229,7 +234,7 @@ export async function fileExists(gcsFilename) {
  * Get file metadata from GCS
  */
 export async function getFileMetadata(gcsFilename) {
-  if (!storage) initializeStorage();
+  if (!storage && !useLocalStorage) initializeStorage();
 
   const bucket = storage.bucket(config.gcs.bucketName);
   const file = bucket.file(gcsFilename);
@@ -485,4 +490,40 @@ async function uploadToLocalStorage({ buffer, gcsFilename, contentType }) {
     logger.error({ err, gcsFilename }, 'Failed to upload to local storage');
     throw err;
   }
+}
+
+/**
+ * Resolve a public URL for a GCS file, using signed URL if possible, or falling back to public URL.
+ */
+async function resolvePublicUrl(file, gcsFilename, { contentType }) {
+  // If signing is explicitly disabled, return public URL immediately
+  if (config.gcs.urlSigning === 'disabled') {
+    // Optionally make public
+    if (config.gcs.makePublic) {
+      try { await file.makePublic(); } catch (_) {}
+    }
+    return buildPublicUrl(gcsFilename);
+  }
+
+  // Try signed URL first (auto or enabled)
+  try {
+    const [url] = await file.getSignedUrl({
+      action: 'read',
+      expires: Date.now() + 7 * 24 * 60 * 60 * 1000
+    });
+    return url;
+  } catch (err) {
+    // Fallback: make public if allowed, then build public URL
+    if (config.gcs.makePublic) {
+      try { await file.makePublic(); } catch (_) {}
+    }
+    return buildPublicUrl(gcsFilename);
+  }
+}
+
+/** Build a public URL based on config or standard storage.googleapis.com */
+function buildPublicUrl(gcsFilename) {
+  const base = config.gcs.publicBaseUrl?.trim() || 'https://storage.googleapis.com';
+  // When using storage.googleapis.com, path style is /bucket/object
+  return `${base.replace(/\/$/, '')}/${config.gcs.bucketName}/${encodeURI(gcsFilename)}`;
 }

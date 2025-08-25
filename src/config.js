@@ -17,7 +17,11 @@ export const config = {
   gcs: {
     bucketName: process.env.GCS_BUCKET_NAME || 'boztell-media-dev',
     keyFilename: process.env.GOOGLE_APPLICATION_CREDENTIALS, // Service account key file path
-    projectId: process.env.GOOGLE_CLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID
+  projectId: process.env.GOOGLE_CLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID,
+  // Optional behaviors
+  makePublic: String(process.env.GCS_MAKE_PUBLIC || '').toLowerCase() === 'true',
+  urlSigning: process.env.GCS_URL_SIGNING || 'auto', // auto | enabled | disabled
+  publicBaseUrl: process.env.GCS_PUBLIC_BASE_URL || '' // e.g. https://storage.googleapis.com
   },
 
   whatsapp: {
