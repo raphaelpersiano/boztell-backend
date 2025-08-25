@@ -1,7 +1,7 @@
 import express from 'express';
 import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
-import { sendTextMessage, sendMediaMessage, sendMediaByUrl, sendTemplateMessage, uploadMediaToWhatsApp } from '../services/whatsappService.js';
+import { sendTextMessage, sendMediaMessage, sendMediaByUrl, sendTemplateMessage, uploadMediaToWhatsApp, sendContactsMessage, sendLocationMessage, sendReactionMessage } from '../services/whatsappService.js';
 import { validateWhatsAppPhoneNumber } from '../services/whatsappService.js';
 import { uploadBuffer as uploadToGCS } from '../services/storageService.js';
 import { ensureRoom } from '../services/roomService.js';
@@ -151,6 +151,104 @@ router.post('/send', async (req, res) => {
       error: 'Failed to send message',
       message: err.message 
     });
+  }
+});
+
+/**
+ * Send contacts message
+ * POST /messages/send-contacts
+ * body: { to, contacts: [...], replyTo?, user_id?, sender_name? }
+ */
+router.post('/send-contacts', async (req, res) => {
+  try {
+    const { to, contacts, replyTo, user_id = 'operator', sender_name = 'Operator' } = req.body;
+    if (!to || !Array.isArray(contacts) || contacts.length === 0) {
+      return res.status(400).json({ error: 'to and contacts[] required' });
+    }
+    const cleanPhone = validateWhatsAppPhoneNumber(to);
+    await ensureRoom(cleanPhone, { customerPhone: cleanPhone });
+
+    // Insert DB row first
+    const messageId = uuidv4();
+    const meta = { direction: 'outgoing', source: 'api', type: 'contacts' };
+    await query(`
+      INSERT INTO messages (id, room_id, sender_id, sender, content_type, content_text,
+        media_type, media_id, gcs_filename, gcs_url, file_size, mime_type,
+        original_filename, wa_message_id, metadata, created_at)
+      VALUES ($1,$2,$3,$4,'contacts',$5,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,$6,NOW())
+    `, [messageId, cleanPhone, user_id, sender_name, `contacts:${contacts.length}`, JSON.stringify(meta)]);
+
+    let result;
+    try {
+      result = await sendContactsMessage(cleanPhone, contacts, { replyTo });
+    } catch (err) {
+      await query('UPDATE messages SET metadata = $1, updated_at = NOW() WHERE id = $2', [JSON.stringify({ ...meta, send_error: err.message }), messageId]);
+      throw Object.assign(new Error(err.message), { _messageId: messageId });
+    }
+    const waMessageId = result.messages?.[0]?.id || null;
+    await query('UPDATE messages SET wa_message_id = $1, updated_at = NOW() WHERE id = $2', [waMessageId, messageId]);
+    res.json({ success: true, to: cleanPhone, type: 'contacts', message_id: messageId, whatsapp_message_id: waMessageId, result });
+  } catch (err) {
+    if (err._messageId) return res.status(500).json({ error: 'Failed to send contacts', message: err.message, message_id: err._messageId });
+    res.status(500).json({ error: 'Failed to send contacts', message: err.message });
+  }
+});
+
+/**
+ * Send location message
+ * POST /messages/send-location
+ * body: { to, location: { latitude, longitude, name?, address? }, replyTo?, user_id?, sender_name? }
+ */
+router.post('/send-location', async (req, res) => {
+  try {
+    const { to, location, replyTo, user_id = 'operator', sender_name = 'Operator' } = req.body;
+    if (!to || !location || typeof location.latitude !== 'number' || typeof location.longitude !== 'number') {
+      return res.status(400).json({ error: 'to and location.latitude/longitude required' });
+    }
+    const cleanPhone = validateWhatsAppPhoneNumber(to);
+    await ensureRoom(cleanPhone, { customerPhone: cleanPhone });
+
+    const messageId = uuidv4();
+    const meta = { direction: 'outgoing', source: 'api', type: 'location', location };
+    await query(`
+      INSERT INTO messages (id, room_id, sender_id, sender, content_type, content_text,
+        media_type, media_id, gcs_filename, gcs_url, file_size, mime_type,
+        original_filename, wa_message_id, metadata, created_at)
+      VALUES ($1,$2,$3,$4,'location',$5,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,$6,NOW())
+    `, [messageId, cleanPhone, user_id, sender_name, `Location: ${location.latitude}, ${location.longitude}`, JSON.stringify(meta)]);
+
+    let result;
+    try {
+      result = await sendLocationMessage(cleanPhone, location, { replyTo });
+    } catch (err) {
+      await query('UPDATE messages SET metadata = $1, updated_at = NOW() WHERE id = $2', [JSON.stringify({ ...meta, send_error: err.message }), messageId]);
+      throw Object.assign(new Error(err.message), { _messageId: messageId });
+    }
+    const waMessageId = result.messages?.[0]?.id || null;
+    await query('UPDATE messages SET wa_message_id = $1, updated_at = NOW() WHERE id = $2', [waMessageId, messageId]);
+    res.json({ success: true, to: cleanPhone, type: 'location', message_id: messageId, whatsapp_message_id: waMessageId, result });
+  } catch (err) {
+    if (err._messageId) return res.status(500).json({ error: 'Failed to send location', message: err.message, message_id: err._messageId });
+    res.status(500).json({ error: 'Failed to send location', message: err.message });
+  }
+});
+
+/**
+ * Send reaction to a message
+ * POST /messages/send-reaction
+ * body: { to, message_id, emoji }
+ */
+router.post('/send-reaction', async (req, res) => {
+  try {
+    const { to, message_id, emoji } = req.body;
+    if (!to || !message_id || !emoji) {
+      return res.status(400).json({ error: 'to, message_id, and emoji are required' });
+    }
+    const cleanPhone = validateWhatsAppPhoneNumber(to);
+    const result = await sendReactionMessage(cleanPhone, message_id, emoji);
+    res.json({ success: true, to: cleanPhone, type: 'reaction', whatsapp_message_id: result.messages?.[0]?.id, result });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to send reaction', message: err.message });
   }
 });
 

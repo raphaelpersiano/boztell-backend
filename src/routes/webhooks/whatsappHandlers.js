@@ -75,9 +75,10 @@ async function processMessagesField(io, value) {
  */
 async function processIncomingMessage(io, message, value) {
   try {
-    const { type, from, id: wa_message_id, timestamp } = message;
+  const { type, from, id: wa_message_id, timestamp } = message;
     const contacts = value.contacts || [];
     const metadata = value.metadata || {};
+  const context = message.context || null;
     
     // Find contact info
     const contact = contacts.find(c => c.wa_id === from) || {};
@@ -95,7 +96,8 @@ async function processIncomingMessage(io, message, value) {
       sender: senderName,
       wa_message_id,
       timestamp: parseInt(timestamp) * 1000, // Convert to milliseconds
-      type
+      type,
+      context
     };
     
     logger.info({ 
@@ -121,6 +123,8 @@ async function processIncomingMessage(io, message, value) {
         
       case 'contacts':
         return await handleContactsMessage(io, { ...baseMessage, contacts: message.contacts });
+      case 'reaction':
+        return await handleReactionMessage(io, { ...baseMessage, reaction: message.reaction });
         
       case 'interactive':
         return await handleInteractiveMessage(io, { ...baseMessage, interactive: message.interactive });
@@ -172,8 +176,9 @@ async function handleTextMessage(io, messageData) {
       content_text: messageData.text.body,
       wa_message_id: messageData.wa_message_id,
       metadata: { 
-        timestamp: messageData.timestamp,
-        type: 'text'
+  timestamp: messageData.timestamp,
+  type: 'text',
+  reply_to: messageData.context?.id || null
       }
     });
     
@@ -214,7 +219,7 @@ async function handleMediaMessage(io, messageData) {
     mime_type: media.mime_type || null,
     sha256: media.sha256 || null,
     wa_message_id: messageData.wa_message_id,
-    metadata: { timestamp: messageData.timestamp }
+  metadata: { timestamp: messageData.timestamp, reply_to: messageData.context?.id || null }
   });
 }
 
@@ -232,13 +237,14 @@ async function handleLocationMessage(io, messageData) {
     content_text: `Location: ${location.latitude}, ${location.longitude}`,
     wa_message_id: messageData.wa_message_id,
     metadata: {
-      timestamp: messageData.timestamp,
+  timestamp: messageData.timestamp,
       location: {
         latitude: location.latitude,
         longitude: location.longitude,
         name: location.name,
         address: location.address
-      }
+  },
+  reply_to: messageData.context?.id || null
     }
   });
 }
@@ -258,8 +264,29 @@ async function handleContactsMessage(io, messageData) {
     content_text: `Shared contacts: ${contactsList}`,
     wa_message_id: messageData.wa_message_id,
     metadata: {
+  timestamp: messageData.timestamp,
+  contacts,
+  reply_to: messageData.context?.id || null
+    }
+  });
+}
+
+/**
+ * Handle reaction messages
+ */
+async function handleReactionMessage(io, messageData) {
+  const { reaction } = messageData;
+  const text = `Reaction ${reaction.emoji} to ${reaction.message_id}`;
+  return await handleIncomingMessage({ io }, {
+    room_id: messageData.room_id,
+    sender_id: messageData.sender_id,
+    sender: messageData.sender,
+    content_type: 'reaction',
+    content_text: text,
+    wa_message_id: messageData.wa_message_id,
+    metadata: {
       timestamp: messageData.timestamp,
-      contacts
+      reaction
     }
   });
 }
@@ -296,8 +323,9 @@ async function handleInteractiveMessage(io, messageData) {
     content_text: responseText,
     wa_message_id: messageData.wa_message_id,
     metadata: {
-      timestamp: messageData.timestamp,
-      interactive: responseData
+  timestamp: messageData.timestamp,
+  interactive: responseData,
+  reply_to: messageData.context?.id || null
     }
   });
 }
@@ -316,8 +344,9 @@ async function handleButtonMessage(io, messageData) {
     content_text: `Button: ${button.text}`,
     wa_message_id: messageData.wa_message_id,
     metadata: {
-      timestamp: messageData.timestamp,
-      button
+  timestamp: messageData.timestamp,
+  button,
+  reply_to: messageData.context?.id || null
     }
   });
 }
@@ -336,8 +365,9 @@ async function handleOrderMessage(io, messageData) {
     content_text: `Order placed with ${order.product_items?.length || 0} items`,
     wa_message_id: messageData.wa_message_id,
     metadata: {
-      timestamp: messageData.timestamp,
-      order
+  timestamp: messageData.timestamp,
+  order,
+  reply_to: messageData.context?.id || null
     }
   });
 }
@@ -356,8 +386,9 @@ async function handleReferralMessage(io, messageData) {
     content_text: `Referral from ${referral.source_type}: ${referral.source_id}`,
     wa_message_id: messageData.wa_message_id,
     metadata: {
-      timestamp: messageData.timestamp,
-      referral
+  timestamp: messageData.timestamp,
+  referral,
+  reply_to: messageData.context?.id || null
     }
   });
 }

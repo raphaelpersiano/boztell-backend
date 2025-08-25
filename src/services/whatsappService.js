@@ -21,6 +21,10 @@ export async function sendTextMessage(to, text, options = {}) {
         body: text
       }
     };
+    // Reply-to context
+    if (options.replyTo) {
+      payload.context = { message_id: options.replyTo };
+    }
     
     const response = await callWhatsAppAPI('/messages', payload);
     
@@ -112,6 +116,11 @@ export async function sendMediaMessage(to, mediaType, mediaId, options = {}) {
       payload[mediaType].filename = options.filename;
     }
     
+    // Reply-to context
+    if (options.replyTo) {
+      payload.context = { message_id: options.replyTo };
+    }
+
     const response = await callWhatsAppAPI('/messages', payload);
     
     logger.info({ 
@@ -158,6 +167,11 @@ export async function sendMediaByUrl(to, mediaType, mediaUrl, options = {}) {
       payload[mediaType].filename = options.filename;
     }
     
+    // Reply-to context
+    if (options.replyTo) {
+      payload.context = { message_id: options.replyTo };
+    }
+
     const response = await callWhatsAppAPI('/messages', payload);
     
     logger.info({ 
@@ -371,4 +385,63 @@ export function validateWhatsAppPhoneNumber(phoneNumber) {
   }
   
   return cleaned;
+}
+
+// Send contacts object
+export async function sendContactsMessage(to, contacts, options = {}) {
+  try {
+    const payload = {
+      messaging_product: 'whatsapp',
+      to,
+      type: 'contacts',
+      contacts
+    };
+    if (options.replyTo) payload.context = { message_id: options.replyTo };
+    const response = await callWhatsAppAPI('/messages', payload);
+    logger.info({ to, count: contacts?.length, messageId: response.messages?.[0]?.id }, 'Contacts message sent');
+    return response;
+  } catch (err) {
+    logger.error({ err, to }, 'Failed to send contacts');
+    throw err;
+  }
+}
+
+// Send location object
+export async function sendLocationMessage(to, location, options = {}) {
+  try {
+    const payload = {
+      messaging_product: 'whatsapp',
+      to,
+      type: 'location',
+      location
+    };
+    if (options.replyTo) payload.context = { message_id: options.replyTo };
+    const response = await callWhatsAppAPI('/messages', payload);
+    logger.info({ to, messageId: response.messages?.[0]?.id }, 'Location message sent');
+    return response;
+  } catch (err) {
+    logger.error({ err, to }, 'Failed to send location');
+    throw err;
+  }
+}
+
+// Send reaction object
+export async function sendReactionMessage(to, messageId, emoji) {
+  try {
+    const payload = {
+      messaging_product: 'whatsapp',
+      to,
+      type: 'reaction',
+      reaction: {
+        message_id: messageId,
+        emoji
+      }
+    };
+    const response = await callWhatsAppAPI('/messages', payload);
+    logger.info({ to, messageId, emoji, waId: response.messages?.[0]?.id }, 'Reaction sent');
+    return response;
+  } catch (err) {
+    logger.error({ err, to, messageId, emoji }, 'Failed to send reaction');
+    throw err;
+  }
 }
