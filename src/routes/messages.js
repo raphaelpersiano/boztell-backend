@@ -72,16 +72,18 @@ router.post('/send', async (req, res) => {
           INSERT INTO messages (
             id, room_id, sender_id, sender, content_type, content_text,
             media_type, media_id, gcs_filename, gcs_url, file_size, mime_type,
-            original_filename, wa_message_id, metadata, created_at
+            original_filename, wa_message_id, reply_to_wa_message_id, metadata, created_at
           ) VALUES (
             $1, $2, $3, $4, 'text', $5,
             NULL, NULL, NULL, NULL, NULL, NULL,
-            NULL, NULL, $6, NOW()
+            NULL, NULL, $6, $7, NOW()
           ) RETURNING *;
         `;
         const baseMeta = { direction: 'outgoing', source: 'api', type: 'text' };
+        if (options.replyTo) baseMeta.reply_to = options.replyTo;
         const insertParams = [
           messageId, cleanPhone, (user_id || 'operator'), (sender_name || 'Operator'), text,
+          options.replyTo || null,
           JSON.stringify(baseMeta)
         ];
         await query(insertSql, insertParams);
@@ -171,12 +173,13 @@ router.post('/send-contacts', async (req, res) => {
     // Insert DB row first
     const messageId = uuidv4();
     const meta = { direction: 'outgoing', source: 'api', type: 'contacts' };
+    if (replyTo) meta.reply_to = replyTo;
     await query(`
       INSERT INTO messages (id, room_id, sender_id, sender, content_type, content_text,
         media_type, media_id, gcs_filename, gcs_url, file_size, mime_type,
-        original_filename, wa_message_id, metadata, created_at)
-      VALUES ($1,$2,$3,$4,'contacts',$5,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,$6,NOW())
-    `, [messageId, cleanPhone, user_id, sender_name, `contacts:${contacts.length}`, JSON.stringify(meta)]);
+        original_filename, wa_message_id, reply_to_wa_message_id, metadata, created_at)
+      VALUES ($1,$2,$3,$4,'contacts',$5,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,$6,$7,NOW())
+    `, [messageId, cleanPhone, user_id, sender_name, `contacts:${contacts.length}`, replyTo || null, JSON.stringify(meta)]);
 
     let result;
     try {
@@ -210,12 +213,13 @@ router.post('/send-location', async (req, res) => {
 
     const messageId = uuidv4();
     const meta = { direction: 'outgoing', source: 'api', type: 'location', location };
+    if (replyTo) meta.reply_to = replyTo;
     await query(`
       INSERT INTO messages (id, room_id, sender_id, sender, content_type, content_text,
         media_type, media_id, gcs_filename, gcs_url, file_size, mime_type,
-        original_filename, wa_message_id, metadata, created_at)
-      VALUES ($1,$2,$3,$4,'location',$5,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,$6,NOW())
-    `, [messageId, cleanPhone, user_id, sender_name, `Location: ${location.latitude}, ${location.longitude}`, JSON.stringify(meta)]);
+        original_filename, wa_message_id, reply_to_wa_message_id, metadata, created_at)
+      VALUES ($1,$2,$3,$4,'location',$5,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,$6,$7,NOW())
+    `, [messageId, cleanPhone, user_id, sender_name, `Location: ${location.latitude}, ${location.longitude}`, replyTo || null, JSON.stringify(meta)]);
 
     let result;
     try {
@@ -240,13 +244,32 @@ router.post('/send-location', async (req, res) => {
  */
 router.post('/send-reaction', async (req, res) => {
   try {
-    const { to, message_id, emoji } = req.body;
+    const { to, message_id, emoji, user_id = 'operator', sender_name = 'Operator' } = req.body;
     if (!to || !message_id || !emoji) {
       return res.status(400).json({ error: 'to, message_id, and emoji are required' });
     }
     const cleanPhone = validateWhatsAppPhoneNumber(to);
-    const result = await sendReactionMessage(cleanPhone, message_id, emoji);
-    res.json({ success: true, to: cleanPhone, type: 'reaction', whatsapp_message_id: result.messages?.[0]?.id, result });
+    await ensureRoom(cleanPhone, { customerPhone: cleanPhone });
+
+    const messageId = uuidv4();
+    const meta = { direction: 'outgoing', source: 'api', type: 'reaction', reaction: { emoji, message_id } };
+    await query(`
+      INSERT INTO messages (id, room_id, sender_id, sender, content_type, content_text,
+        media_type, media_id, gcs_filename, gcs_url, file_size, mime_type,
+        original_filename, wa_message_id, reaction_emoji, reaction_to_wa_message_id, metadata, created_at)
+      VALUES ($1,$2,$3,$4,'reaction',$5,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,$6,$7,$8,NOW())
+    `, [messageId, cleanPhone, user_id, sender_name, `Reaction ${emoji} to ${message_id}`, emoji, message_id, JSON.stringify(meta)]);
+
+    let result;
+    try {
+      result = await sendReactionMessage(cleanPhone, message_id, emoji);
+    } catch (err) {
+      await query('UPDATE messages SET metadata = $1, updated_at = NOW() WHERE id = $2', [JSON.stringify({ ...meta, send_error: err.message }), messageId]);
+      throw err;
+    }
+    const waMessageId = result.messages?.[0]?.id || null;
+    await query('UPDATE messages SET wa_message_id = $1, updated_at = NOW() WHERE id = $2', [waMessageId, messageId]);
+    res.json({ success: true, to: cleanPhone, type: 'reaction', message_id: messageId, whatsapp_message_id: waMessageId, result });
   } catch (err) {
     res.status(500).json({ error: 'Failed to send reaction', message: err.message });
   }

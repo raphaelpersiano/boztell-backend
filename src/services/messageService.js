@@ -29,6 +29,10 @@ export async function handleIncomingMessage({ io }, input) {
     
     // 2. Save message to database
     const id = uuidv4();
+  const replyTo = input.metadata?.reply_to || null;
+    const reactionEmoji = input.metadata?.reaction?.emoji || null;
+    const reactionToWa = input.metadata?.reaction?.message_id || null;
+
     const params = [
       id,
       input.room_id,
@@ -37,6 +41,9 @@ export async function handleIncomingMessage({ io }, input) {
       input.content_type,
       input.content_text,
       input.wa_message_id || null,
+  replyTo,
+      reactionEmoji,
+      reactionToWa,
       JSON.stringify(input.metadata || {})
     ];
 

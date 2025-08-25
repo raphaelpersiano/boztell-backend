@@ -215,18 +215,19 @@ async function saveMediaMessage(data) {
     INSERT INTO messages (
       id, room_id, sender_id, sender, content_type, content_text,
       media_type, media_id, gcs_filename, gcs_url, file_size, mime_type,
-      original_filename, wa_message_id, metadata, created_at
+      original_filename, wa_message_id, reply_to_wa_message_id, metadata, created_at
     ) VALUES (
       $1, $2, $3, $4, 'media', $5,
       $6, $7, $8, $9, $10, $11,
-      $12, $13, $14, NOW()
+      $12, $13, $14, $15, NOW()
     ) RETURNING *;
   `;
   
+  const replyTo = data.reply_to_wa_message_id || data.metadata?.reply_to || null;
   const params = [
     data.id, data.room_id, data.sender_id, data.sender, data.caption,
     data.media_type, data.media_id, data.gcs_filename, data.gcs_url, data.file_size,
-    data.mime_type, data.original_filename, data.wa_message_id, JSON.stringify(data.metadata)
+    data.mime_type, data.original_filename, data.wa_message_id, replyTo, JSON.stringify(data.metadata)
   ];
   
   const { rows } = await query(sql, params);
