@@ -5,12 +5,26 @@ export const config = {
   env: process.env.NODE_ENV || 'development',
   port: process.env.PORT || 8080,
   databaseUrl: process.env.DATABASE_URL,
-  fcmServerKey: process.env.FCM_SERVER_KEY,
+  
+  // Firebase Admin SDK
+  firebase: {
+    serviceAccount: process.env.FIREBASE_SERVICE_ACCOUNT, // JSON string or file path
+    projectId: process.env.FIREBASE_PROJECT_ID
+  },
+
+  // Google Cloud Storage
+  gcs: {
+    bucketName: process.env.GCS_BUCKET_NAME,
+    keyFilename: process.env.GOOGLE_APPLICATION_CREDENTIALS // Service account key file path
+  },
+
   whatsapp: {
-    verifyToken: process.env.WHATSAPP_VERIFY_TOKEN, // for webhook verification
-    appSecret: process.env.WHATSAPP_SECRET, // for signature verification (X-Hub-Signature-256)
-    accessToken: process.env.WHATSAPP_ACCESS_TOKEN, // for sending messages if needed
-    graphVersion: 'v23.0'
+    verifyToken: process.env.WHATSAPP_VERIFY_TOKEN,
+    appSecret: process.env.WHATSAPP_SECRET,
+    accessToken: process.env.WHATSAPP_ACCESS_TOKEN,
+    phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID,
+    graphVersion: 'v23.0',
+    baseUrl: 'https://graph.facebook.com'
   }
 };
 

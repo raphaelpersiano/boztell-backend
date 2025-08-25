@@ -7,7 +7,6 @@ import { logger } from '../utils/logger.js';
  * Save incoming message, emit to socket room, and send push to participants.
  * @param {object} deps - dependencies
  * @param {import('socket.io').Server} deps.io - socket.io server
- * @param {string} deps.fcmServerKey - FCM server key
  * @param {object} input - message input
  * @param {string} input.room_id
  * @param {string} input.sender_id
@@ -16,7 +15,7 @@ import { logger } from '../utils/logger.js';
  * @param {string} input.content_text
  * @param {string} [input.wa_message_id]
  */
-export async function handleIncomingMessage({ io, fcmServerKey }, input) {
+export async function handleIncomingMessage({ io }, input) {
   const id = uuidv4();
   const params = [
     id,
@@ -40,19 +39,59 @@ export async function handleIncomingMessage({ io, fcmServerKey }, input) {
   // Fetch participants to notify
   const { rows: participants } = await query(SQL.getRoomParticipants, [input.room_id]);
 
-  // Send push (fire-and-forget)
-  const payload = {
-    room_id: input.room_id,
-    message: input.content_text,
-    sender: input.sender
-  };
-  for (const p of participants) {
-    if (!p.device_token) continue;
-    import('./fcmService.js').then(({ sendPushNotification }) =>
-      sendPushNotification({ serverKey: fcmServerKey, token: p.device_token, payload })
-        .catch((err) => logger.warn({ err }, 'FCM push failed'))
-    );
+  // Send push notifications using Firebase Admin SDK
+  if (participants.length > 0) {
+    const tokens = participants.map(p => p.device_token).filter(Boolean);
+    
+    if (tokens.length > 0) {
+      const { sendMulticastNotification } = await import('./fcmService.js');
+      
+      try {
+        const result = await sendMulticastNotification({
+          tokens,
+          payload: {
+            title: input.sender,
+            message: input.content_text,
+            room_id: input.room_id,
+            sender: input.sender,
+            message_id: id,
+            type: 'text'
+          }
+        });
+
+        // Remove invalid tokens if any
+        if (result.invalidTokens && result.invalidTokens.length > 0) {
+          await removeInvalidTokens(result.invalidTokens);
+        }
+
+        logger.info({ 
+          messageId: id, 
+          room_id: input.room_id,
+          notificationsSent: result.successCount 
+        }, 'Message processed and notifications sent');
+
+      } catch (err) {
+        logger.warn({ err, messageId: id }, 'Push notification failed');
+      }
+    }
   }
 
   return message;
+}
+
+/**
+ * Remove invalid device tokens from database
+ */
+async function removeInvalidTokens(tokens) {
+  if (!tokens || tokens.length === 0) return;
+  
+  try {
+    const placeholders = tokens.map((_, i) => `$${i + 1}`).join(',');
+    const sql = `DELETE FROM devices WHERE device_token IN (${placeholders})`;
+    
+    await query(sql, tokens);
+    logger.info({ count: tokens.length }, 'Invalid device tokens removed');
+  } catch (err) {
+    logger.error({ err, tokenCount: tokens.length }, 'Failed to remove invalid tokens');
+  }
 }

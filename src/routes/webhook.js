@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import express from 'express';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
-import { handleIncomingMessage } from '../services/messageService.js';
+import { routeWhatsAppWebhook } from './webhooks/whatsappHandlers.js';
 
 export function createWebhookRouter(io) {
   const router = express.Router();
@@ -28,19 +28,13 @@ export function createWebhookRouter(io) {
 
     const body = req.body;
     try {
-      const events = extractWhatsappMessages(body);
-      for (const ev of events) {
-        // Map to room/user domain. You might look up room by wa phone id.
-        const roomId = ev.room_id; // extracted by mapping function or defaults
-        await handleIncomingMessage({ io, fcmServerKey: config.fcmServerKey }, {
-          room_id: roomId,
-          sender_id: ev.sender_id,
-          sender: ev.sender_name || ev.sender_id,
-          content_type: 'text',
-          content_text: ev.text,
-          wa_message_id: ev.wa_message_id
-        });
-      }
+      const results = await routeWhatsAppWebhook({ io, body });
+      
+      logger.info({ 
+        processedCount: results.length,
+        entryCount: body.entry?.length || 0 
+      }, 'WhatsApp webhook processed');
+      
       res.sendStatus(200);
     } catch (err) {
       logger.error({ err, body }, 'Failed processing WhatsApp webhook');
@@ -63,28 +57,4 @@ function verifySignature(req) {
   } catch (_) {
     return false;
   }
-}
-
-// Parse WhatsApp Business Cloud API v23 notification to extract messages
-function extractWhatsappMessages(body) {
-  const results = [];
-  if (!body || !body.entry) return results;
-  for (const entry of body.entry) {
-    for (const change of entry.changes || []) {
-      const value = change.value || {};
-      const messages = value.messages || [];
-      const contacts = value.contacts || [];
-      for (const m of messages) {
-        // Example mapping: use from (wa id) and contact profile name
-        const contact = contacts.find(c => c.wa_id === m.from) || {};
-        const sender_id = m.from;
-        const sender_name = contact.profile?.name || sender_id;
-        const text = m.text?.body || '';
-        const wa_message_id = m.id;
-        const room_id = value.metadata?.display_phone_number || value.metadata?.phone_number_id || 'default';
-        results.push({ sender_id, sender_name, text, wa_message_id, room_id });
-      }
-    }
-  }
-  return results;
 }
