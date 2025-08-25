@@ -57,7 +57,8 @@ export async function handleIncomingMedia({ io }, input) {
     });
     
     // 3. Save to database
-  const message = await saveMediaMessage({
+    const storedName = (gcsData.gcsFilename || '').split('/').pop() || input.filename;
+    const message = await saveMediaMessage({
       id: messageId,
       room_id: input.room_id,
       sender_id: input.sender_id,
@@ -69,7 +70,7 @@ export async function handleIncomingMedia({ io }, input) {
       gcs_url: gcsData.url,
       file_size: gcsData.size,
       mime_type: gcsData.contentType,
-      original_filename: input.filename,
+      original_filename: storedName,
       wa_message_id: input.wa_message_id,
       metadata: input.metadata || {}
     });

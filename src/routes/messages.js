@@ -47,7 +47,7 @@ const upload = multer({
  */
 router.post('/send', async (req, res) => {
   try {
-    const { to, text, type = 'text', ...options } = req.body;
+    const { to, text, type = 'text', user_id = 'operator', sender_name = 'Operator', ...options } = req.body;
     
     if (!to || !text) {
       return res.status(400).json({ 
@@ -63,7 +63,63 @@ router.post('/send', async (req, res) => {
     
     switch (type) {
       case 'text':
-        result = await sendTextMessage(cleanPhone, text, options);
+        // Ensure room exists (1 room = 1 phone number)
+        await ensureRoom(cleanPhone, { customerPhone: cleanPhone });
+
+        // 1) Insert DB row first
+        const messageId = uuidv4();
+        const insertSql = `
+          INSERT INTO messages (
+            id, room_id, sender_id, sender, content_type, content_text,
+            media_type, media_id, gcs_filename, gcs_url, file_size, mime_type,
+            original_filename, wa_message_id, metadata, created_at
+          ) VALUES (
+            $1, $2, $3, $4, 'text', $5,
+            NULL, NULL, NULL, NULL, NULL, NULL,
+            NULL, NULL, $6, NOW()
+          ) RETURNING *;
+        `;
+        const baseMeta = { direction: 'outgoing', source: 'api', type: 'text' };
+        const insertParams = [
+          messageId, cleanPhone, (user_id || 'operator'), (sender_name || 'Operator'), text,
+          JSON.stringify(baseMeta)
+        ];
+        await query(insertSql, insertParams);
+
+        // 2) Send to WhatsApp
+        try {
+          result = await sendTextMessage(cleanPhone, text, options);
+        } catch (sendErr) {
+          // Mark failure on the same row and return 500 with message_id for tracking
+          const failMeta = { ...baseMeta, send_error: sendErr.message };
+          try {
+            await query('UPDATE messages SET metadata = $1, updated_at = NOW() WHERE id = $2', [
+              JSON.stringify(failMeta), messageId
+            ]);
+          } catch (_) { /* best effort */ }
+          throw Object.assign(new Error(sendErr.message), { _messageId: messageId });
+        }
+
+        // 3) Update DB row with WA message id
+        const waMessageId = result.messages?.[0]?.id || null;
+        try {
+          await query('UPDATE messages SET wa_message_id = $1, updated_at = NOW() WHERE id = $2', [
+            waMessageId, messageId
+          ]);
+        } catch (updErr) {
+          logger.warn({ err: updErr, messageId }, 'Failed to update wa_message_id for text message');
+        }
+
+        logger.info({ to: cleanPhone, type, messageId, waMessageId }, 'Text message persisted and sent');
+
+        return res.json({
+          success: true,
+          to: cleanPhone,
+          type,
+          message_id: messageId,
+          whatsapp_message_id: waMessageId,
+          result
+        });
         break;
         
       case 'template':
@@ -78,23 +134,15 @@ router.post('/send', async (req, res) => {
         return res.status(400).json({ error: `Unsupported message type: ${type}` });
     }
     
-    logger.info({ 
-      to: cleanPhone, 
-      type,
-      messageId: result.messages?.[0]?.id 
-    }, 'Message sent to WhatsApp successfully');
-    
-    res.json({
-      success: true,
-      to: cleanPhone,
-      type,
-      whatsapp_message_id: result.messages?.[0]?.id,
-      result
-    });
+    logger.info({ to: cleanPhone, type, messageId: result.messages?.[0]?.id }, 'Message sent to WhatsApp successfully');
+    res.json({ success: true, to: cleanPhone, type, whatsapp_message_id: result.messages?.[0]?.id, result });
     
   } catch (err) {
     logger.error({ err, body: req.body }, 'Failed to send WhatsApp message');
     
+    if (err._messageId) {
+      return res.status(500).json({ error: 'Failed to send message', message: err.message, message_id: err._messageId });
+    }
     if (err.message.includes('Invalid phone number')) {
       return res.status(400).json({ error: err.message });
     }
@@ -278,7 +326,7 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
     await ensureRoom(cleanPhone, { customerPhone: cleanPhone });
 
     // 1) Upload to GCS (organized by phone/date)
-    const gcs = await uploadToGCS({
+  const gcs = await uploadToGCS({
       buffer,
       filename: originalname,
       contentType: mimetype,
@@ -289,7 +337,7 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
 
     // 2) Create DB row first (will update with WA IDs later)
     const messageId = uuidv4();
-    const insertSql = `
+  const insertSql = `
       INSERT INTO messages (
         id, room_id, sender_id, sender, content_type, content_text,
         media_type, media_id, gcs_filename, gcs_url, file_size, mime_type,
@@ -301,10 +349,11 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
       ) RETURNING *;
     `;
     const metadata = { direction: 'outgoing', source: 'api', filename: originalname };
+    const storedName = (gcs.gcsFilename || '').split('/').pop() || originalname;
     const insertParams = [
       messageId, cleanPhone, (user_id || 'operator'), (sender_name || 'Operator'), caption,
       mediaType, gcs.gcsFilename, gcs.url, gcs.size, mimetype,
-      originalname, JSON.stringify(metadata)
+      storedName, JSON.stringify(metadata)
     ];
     const { rows: insertedRows } = await query(insertSql, insertParams);
 

@@ -43,17 +43,11 @@ export function initializeStorage() {
  */
 export async function uploadBuffer({ buffer, filename, contentType, folder = 'media', roomId = null, phoneNumber = null }) {
   if (!storage && !useLocalStorage) initializeStorage();
+  const storedFilename = buildStoredFilename(filename, contentType);
   const fileId = uuidv4();
-  const extension = path.extname(filename || '') || getExtensionFromMimeType(contentType);
   
   // Create organized folder structure: room/date/file
-  const gcsFilename = generateOrganizedPath({ 
-    folder, 
-    roomId, 
-    phoneNumber, 
-    fileId, 
-    extension 
-  });
+  const gcsFilename = generateOrganizedPath({ folder, roomId, phoneNumber, storedFilename });
 
   // Use local storage fallback for development
   if (useLocalStorage || !storage) {
@@ -103,17 +97,11 @@ export async function uploadStream({ stream, filename, contentType, folder = 'me
   if (!storage && !useLocalStorage) initializeStorage();
 
   const bucket = storage.bucket(config.gcs.bucketName);
+  const storedFilename = buildStoredFilename(filename, contentType);
   const fileId = uuidv4();
-  const extension = path.extname(filename || '') || getExtensionFromMimeType(contentType);
   
   // Create organized folder structure: room/date/file
-  const gcsFilename = generateOrganizedPath({ 
-    folder, 
-    roomId, 
-    phoneNumber, 
-    fileId, 
-    extension 
-  });
+  const gcsFilename = generateOrganizedPath({ folder, roomId, phoneNumber, storedFilename });
   
   const file = bucket.file(gcsFilename);
   
@@ -390,14 +378,13 @@ function formatBytes(bytes) {
  * Structure: folder/phone_number/YYYY-MM-DD/fileId.ext
  * Since 1 room = 1 phone number, we use phone number directly as folder
  */
-function generateOrganizedPath({ folder, roomId, phoneNumber, fileId, extension }) {
+function generateOrganizedPath({ folder, roomId, phoneNumber, storedFilename }) {
   const now = new Date();
   const dateFolder = now.toISOString().split('T')[0]; // YYYY-MM-DD format
   
   // Since roomId = phone number, use roomId directly as phone folder
   const phoneFolder = cleanPhoneNumber(roomId || phoneNumber || 'unknown');
-  
-  return `${folder}/${phoneFolder}/${dateFolder}/${fileId}${extension}`;
+  return `${folder}/${phoneFolder}/${dateFolder}/${storedFilename}`;
 }
 
 /**
@@ -490,6 +477,34 @@ async function uploadToLocalStorage({ buffer, gcsFilename, contentType }) {
     logger.error({ err, gcsFilename }, 'Failed to upload to local storage');
     throw err;
   }
+}
+
+/**
+ * Build stored filename using original name, preserving base and extension,
+ * and appending a short uuid/timestamp to avoid collisions.
+ */
+function buildStoredFilename(originalName, contentType) {
+  const safeName = cleanFilename(originalName) || 'file';
+  const extFromName = path.extname(safeName);
+  const base = extFromName ? safeName.slice(0, -extFromName.length) : safeName;
+  const ext = extFromName || getExtensionFromMimeType(contentType) || '';
+  const suffix = `_${new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0,14)}_${uuidv4().slice(0,8)}`;
+  return `${base}${suffix}${ext}`;
+}
+
+/** Sanitize a filename (keep letters, numbers, dash, underscore, dot) and trim length */
+function cleanFilename(name) {
+  if (!name) return '';
+  // Replace spaces and illegal chars, collapse repeats, limit length
+  const cleaned = name
+    .replace(/\\/g, '/')
+    .split('/')
+    .pop()
+    .replace(/[^a-zA-Z0-9._-]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '')
+    .slice(0, 120);
+  return cleaned;
 }
 
 /**
