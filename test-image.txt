@@ -1,0 +1,3 @@
+This is a test file for media upload testing.
+You can use this file to test the /messages/upload-media endpoint.
+Replace this with actual image/document files when testing.

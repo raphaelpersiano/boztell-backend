@@ -9,6 +9,7 @@ import { setupSocket } from './socket/index.js';
 import { createWebhookRouter } from './routes/webhook.js';
 import { devicesRouter } from './routes/devices.js';
 import { mediaRouter } from './routes/media.js';
+import { messagesRouter } from './routes/messages.js';
 import { initializeFirebase } from './services/fcmService.js';
 import { initializeStorage } from './services/storageService.js';
 
@@ -51,6 +52,7 @@ try {
 app.use('/webhook', createWebhookRouter(io));
 app.use('/devices', devicesRouter);
 app.use('/media', mediaRouter);
+app.use('/messages', messagesRouter);
 
 // API info endpoint
 app.get('/api', (req, res) => {
@@ -70,6 +72,7 @@ app.get('/api', (req, res) => {
       webhooks: '/webhook/whatsapp',
       devices: '/devices/register',
       media: '/media/upload',
+      messages: '/messages/send',
       health: '/health'
     }
   });
@@ -90,6 +93,6 @@ app.use((req, res) => {
 server.listen(config.port, config.host, () => {
   logger.info(`Boztell Backend v2.0.0 listening on ${config.host}:${config.port}`);
   logger.info(`Environment: ${config.env}`);
-  logger.info(`Health check: http://${config.host}:${config.port}/health`);
-  logger.info(`API info: http://${config.host}:${config.port}/api`);
+  logger.info(`Health check: http://localhost:${config.port}/health`);
+  logger.info(`API info: http://localhost:${config.port}/api`);
 });

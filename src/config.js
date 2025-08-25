@@ -4,7 +4,7 @@ dotenv.config();
 export const config = {
   env: process.env.NODE_ENV || 'development',
   port: process.env.PORT || 8080,
-  host: process.env.HOST || '0.0.0.0', // Bind to 0.0.0.0 for Cloud Run
+  host: process.env.HOST || (process.env.NODE_ENV === 'production' ? '0.0.0.0' : 'localhost'), // localhost for dev, 0.0.0.0 for production
   databaseUrl: process.env.DATABASE_URL,
   
   // Firebase Admin SDK

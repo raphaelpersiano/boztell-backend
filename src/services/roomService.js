@@ -27,34 +27,29 @@ export async function ensureRoom(roomId, metadata = {}) {
     const insertSql = `
       INSERT INTO rooms (
         id, 
-        name, 
-        description,
-        room_type,
-        metadata,
+        external_id,
+        title,
         created_at,
         updated_at
-      ) VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+      ) VALUES ($1, $2, $3, NOW(), NOW())
       RETURNING *;
     `;
     
-    const roomName = metadata.customerName || `Customer ${roomId}`;
-    const roomDescription = `WhatsApp chat with ${roomId}`;
-    const roomType = 'whatsapp_chat';
+    const roomTitle = metadata.customerName || `Customer ${roomId}`;
+    const externalId = metadata.externalId || roomId;
     
     const { rows: newRooms } = await query(insertSql, [
       roomId,
-      roomName,
-      roomDescription,
-      roomType,
-      JSON.stringify(metadata)
+      externalId,
+      roomTitle
     ]);
     
     const newRoom = newRooms[0];
     
     logger.info({ 
       roomId, 
-      roomName,
-      roomType 
+      roomTitle,
+      externalId 
     }, 'New room created successfully');
     
     return newRoom;
@@ -68,21 +63,38 @@ export async function ensureRoom(roomId, metadata = {}) {
 /**
  * Update room metadata
  * @param {string} roomId 
- * @param {object} metadata 
+ * @param {object} updates - Update fields (title, external_id)
  * @returns {object} Updated room
  */
-export async function updateRoomMetadata(roomId, metadata) {
+export async function updateRoomMetadata(roomId, updates) {
   try {
+    const setParts = [];
+    const params = [roomId];
+    
+    if (updates.title) {
+      setParts.push(`title = $${params.length + 1}`);
+      params.push(updates.title);
+    }
+    
+    if (updates.external_id) {
+      setParts.push(`external_id = $${params.length + 1}`);
+      params.push(updates.external_id);
+    }
+    
+    if (setParts.length === 0) {
+      throw new Error('No valid fields to update');
+    }
+    
+    setParts.push(`updated_at = NOW()`);
+    
     const sql = `
       UPDATE rooms 
-      SET 
-        metadata = $2,
-        updated_at = NOW()
+      SET ${setParts.join(', ')}
       WHERE id = $1
       RETURNING *;
     `;
     
-    const { rows } = await query(sql, [roomId, JSON.stringify(metadata)]);
+    const { rows } = await query(sql, params);
     
     if (rows.length === 0) {
       throw new Error(`Room ${roomId} not found`);
@@ -132,9 +144,9 @@ export async function listRooms(options = {}) {
     const conditions = [];
     const params = [];
     
-    if (options.roomType) {
-      conditions.push(`r.room_type = $${params.length + 1}`);
-      params.push(options.roomType);
+    if (options.title) {
+      conditions.push(`r.title ILIKE $${params.length + 1}`);
+      params.push(`%${options.title}%`);
     }
     
     if (conditions.length > 0) {

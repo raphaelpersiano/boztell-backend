@@ -1,6 +1,9 @@
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 
+// FormData polyfill for Node.js
+const FormData = globalThis.FormData || (await import('form-data')).default;
+
 /**
  * Send text message to WhatsApp Business API
  * @param {string} to - Recipient phone number (with country code)
@@ -36,10 +39,55 @@ export async function sendTextMessage(to, text, options = {}) {
 }
 
 /**
- * Send media message to WhatsApp Business API
+ * Upload media to WhatsApp Business API
+ * @param {Buffer} buffer - File buffer
+ * @param {string} filename - Original filename
+ * @param {string} mimeType - MIME type
+ * @returns {object} WhatsApp media upload response
+ */
+export async function uploadMediaToWhatsApp({ buffer, filename, mimeType }) {
+  try {
+    const formData = new FormData();
+    formData.append('file', new Blob([buffer], { type: mimeType }), filename);
+    formData.append('type', mimeType);
+    formData.append('messaging_product', 'whatsapp');
+    
+    const url = `${config.whatsapp.baseUrl}/${config.whatsapp.graphVersion}/${config.whatsapp.phoneNumberId}/media`;
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${config.whatsapp.accessToken}`
+      },
+      body: formData
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`WhatsApp media upload failed: ${response.status} - ${errorText}`);
+    }
+    
+    const data = await response.json();
+    
+    logger.info({ 
+      filename, 
+      mimeType,
+      mediaId: data.id 
+    }, 'Media uploaded to WhatsApp successfully');
+    
+    return data;
+    
+  } catch (err) {
+    logger.error({ err, filename, mimeType }, 'Failed to upload media to WhatsApp');
+    throw err;
+  }
+}
+
+/**
+ * Send media message using WhatsApp media ID
  * @param {string} to - Recipient phone number
  * @param {string} mediaType - 'image', 'video', 'audio', 'document'
- * @param {string} mediaId - WhatsApp media ID or URL
+ * @param {string} mediaId - WhatsApp media ID
  * @param {object} options - Additional options (caption, filename, etc.)
  * @returns {object} WhatsApp API response
  */
@@ -77,6 +125,52 @@ export async function sendMediaMessage(to, mediaType, mediaId, options = {}) {
     
   } catch (err) {
     logger.error({ err, to, mediaType, mediaId }, 'Failed to send media message to WhatsApp');
+    throw err;
+  }
+}
+
+/**
+ * Send media message using URL (WhatsApp will download and cache)
+ * @param {string} to - Recipient phone number
+ * @param {string} mediaType - 'image', 'video', 'audio', 'document'
+ * @param {string} mediaUrl - Public URL to media file
+ * @param {object} options - Additional options
+ * @returns {object} WhatsApp API response
+ */
+export async function sendMediaByUrl(to, mediaType, mediaUrl, options = {}) {
+  try {
+    const payload = {
+      messaging_product: 'whatsapp',
+      to: to,
+      type: mediaType,
+      [mediaType]: {
+        link: mediaUrl
+      }
+    };
+    
+    // Add caption for image/video
+    if (options.caption && ['image', 'video'].includes(mediaType)) {
+      payload[mediaType].caption = options.caption;
+    }
+    
+    // Add filename for document
+    if (options.filename && mediaType === 'document') {
+      payload[mediaType].filename = options.filename;
+    }
+    
+    const response = await callWhatsAppAPI('/messages', payload);
+    
+    logger.info({ 
+      to, 
+      mediaType,
+      mediaUrl,
+      messageId: response.messages?.[0]?.id 
+    }, 'Media message sent to WhatsApp via URL');
+    
+    return response;
+    
+  } catch (err) {
+    logger.error({ err, to, mediaType, mediaUrl }, 'Failed to send media message via URL to WhatsApp');
     throw err;
   }
 }

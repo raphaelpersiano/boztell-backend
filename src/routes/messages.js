@@ -1,0 +1,355 @@
+import express from 'express';
+import multer from 'multer';
+import { sendTextMessage, sendMediaMessage, sendMediaByUrl, sendTemplateMessage, uploadMediaToWhatsApp } from '../services/whatsappService.js';
+import { validateWhatsAppPhoneNumber } from '../services/whatsappService.js';
+import { logger } from '../utils/logger.js';
+
+const router = express.Router();
+
+// Configure multer for media uploads
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 100 * 1024 * 1024 // 100MB max (WhatsApp limit: 16MB for most, 100MB for documents)
+  },
+  fileFilter: (req, file, cb) => {
+    // WhatsApp supported media types
+    const allowedTypes = [
+      // Images
+      'image/jpeg', 'image/png', 'image/webp',
+      // Videos
+      'video/mp4', 'video/3gpp',
+      // Audio
+      'audio/aac', 'audio/mp4', 'audio/mpeg', 'audio/amr', 'audio/ogg',
+      // Documents
+      'application/pdf', 'application/vnd.ms-powerpoint', 'application/msword',
+      'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'text/plain'
+    ];
+    
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`Unsupported media type for WhatsApp: ${file.mimetype}`), false);
+    }
+  }
+});
+
+/**
+ * Send text message to WhatsApp
+ * POST /messages/send
+ */
+router.post('/send', async (req, res) => {
+  try {
+    const { to, text, type = 'text', ...options } = req.body;
+    
+    if (!to || !text) {
+      return res.status(400).json({ 
+        error: 'Missing required fields: to, text' 
+      });
+    }
+    
+    // Validate phone number
+    const cleanPhone = validateWhatsAppPhoneNumber(to);
+    
+    // Send message based on type
+    let result;
+    
+    switch (type) {
+      case 'text':
+        result = await sendTextMessage(cleanPhone, text, options);
+        break;
+        
+      case 'template':
+        const { templateName, languageCode = 'en', parameters = [] } = options;
+        if (!templateName) {
+          return res.status(400).json({ error: 'templateName required for template messages' });
+        }
+        result = await sendTemplateMessage(cleanPhone, templateName, languageCode, parameters);
+        break;
+        
+      default:
+        return res.status(400).json({ error: `Unsupported message type: ${type}` });
+    }
+    
+    logger.info({ 
+      to: cleanPhone, 
+      type,
+      messageId: result.messages?.[0]?.id 
+    }, 'Message sent to WhatsApp successfully');
+    
+    res.json({
+      success: true,
+      to: cleanPhone,
+      type,
+      whatsapp_message_id: result.messages?.[0]?.id,
+      result
+    });
+    
+  } catch (err) {
+    logger.error({ err, body: req.body }, 'Failed to send WhatsApp message');
+    
+    if (err.message.includes('Invalid phone number')) {
+      return res.status(400).json({ error: err.message });
+    }
+    
+    res.status(500).json({ 
+      error: 'Failed to send message',
+      message: err.message 
+    });
+  }
+});
+
+/**
+ * Send media message to WhatsApp
+ * POST /messages/send-media
+ */
+router.post('/send-media', async (req, res) => {
+  try {
+    const { to, mediaType, mediaId, mediaUrl, caption, filename } = req.body;
+    
+    if (!to || !mediaType) {
+      return res.status(400).json({ 
+        error: 'Missing required fields: to, mediaType' 
+      });
+    }
+    
+    if (!mediaId && !mediaUrl) {
+      return res.status(400).json({ 
+        error: 'Either mediaId or mediaUrl is required' 
+      });
+    }
+    
+    const cleanPhone = validateWhatsAppPhoneNumber(to);
+    
+    let result;
+    
+    if (mediaId) {
+      // Send using WhatsApp media ID
+      result = await sendMediaMessage(cleanPhone, mediaType, mediaId, {
+        caption,
+        filename
+      });
+    } else {
+      // Send using URL
+      result = await sendMediaByUrl(cleanPhone, mediaType, mediaUrl, {
+        caption,
+        filename
+      });
+    }
+    
+    logger.info({ 
+      to: cleanPhone, 
+      mediaType,
+      mediaId: mediaId || 'url',
+      messageId: result.messages?.[0]?.id 
+    }, 'Media message sent to WhatsApp successfully');
+    
+    res.json({
+      success: true,
+      to: cleanPhone,
+      mediaType,
+      mediaId: mediaId || null,
+      mediaUrl: mediaUrl || null,
+      whatsapp_message_id: result.messages?.[0]?.id,
+      result
+    });
+    
+  } catch (err) {
+    logger.error({ err, body: req.body }, 'Failed to send WhatsApp media message');
+    res.status(500).json({ 
+      error: 'Failed to send media message',
+      message: err.message 
+    });
+  }
+});
+
+/**
+ * Upload and send media to WhatsApp in one request
+ * POST /messages/send-media-file
+ */
+router.post('/send-media-file', upload.single('media'), async (req, res) => {
+  try {
+    const { to, caption } = req.body;
+    
+    if (!to) {
+      return res.status(400).json({ error: 'Phone number (to) required' });
+    }
+    
+    if (!req.file) {
+      return res.status(400).json({ error: 'Media file required' });
+    }
+    
+    const cleanPhone = validateWhatsAppPhoneNumber(to);
+    const { buffer, originalname, mimetype } = req.file;
+    
+    // Determine media type based on MIME type
+    let mediaType;
+    if (mimetype.startsWith('image/')) {
+      mediaType = 'image';
+    } else if (mimetype.startsWith('video/')) {
+      mediaType = 'video';
+    } else if (mimetype.startsWith('audio/')) {
+      mediaType = 'audio';
+    } else {
+      mediaType = 'document';
+    }
+    
+    // 1. Upload media to WhatsApp
+    const uploadResult = await uploadMediaToWhatsApp({
+      buffer,
+      filename: originalname,
+      mimeType: mimetype
+    });
+    
+    // 2. Send media message
+    const sendResult = await sendMediaMessage(cleanPhone, mediaType, uploadResult.id, {
+      caption,
+      filename: originalname
+    });
+    
+    logger.info({ 
+      to: cleanPhone,
+      mediaType,
+      filename: originalname,
+      mediaId: uploadResult.id,
+      messageId: sendResult.messages?.[0]?.id 
+    }, 'Media uploaded and sent to WhatsApp successfully');
+    
+    res.json({
+      success: true,
+      to: cleanPhone,
+      mediaType,
+      filename: originalname,
+      size: buffer.length,
+      whatsapp_media_id: uploadResult.id,
+      whatsapp_message_id: sendResult.messages?.[0]?.id,
+      upload: uploadResult,
+      send: sendResult
+    });
+    
+  } catch (err) {
+    logger.error({ err, body: req.body }, 'Failed to upload and send media to WhatsApp');
+    
+    if (err.message.includes('Unsupported media type')) {
+      return res.status(400).json({ error: err.message });
+    }
+    
+    res.status(500).json({ 
+      error: 'Failed to upload and send media',
+      message: err.message 
+    });
+  }
+});
+
+/**
+ * Upload media to WhatsApp (get media ID for later use)
+ * POST /messages/upload-media
+ */
+router.post('/upload-media', upload.single('media'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Media file required' });
+    }
+    
+    const { buffer, originalname, mimetype } = req.file;
+    
+    const result = await uploadMediaToWhatsApp({
+      buffer,
+      filename: originalname,
+      mimeType: mimetype
+    });
+    
+    logger.info({ 
+      filename: originalname,
+      mimeType: mimetype,
+      mediaId: result.id 
+    }, 'Media uploaded to WhatsApp for later use');
+    
+    res.json({
+      success: true,
+      filename: originalname,
+      mimeType: mimetype,
+      size: buffer.length,
+      whatsapp_media_id: result.id,
+      result
+    });
+    
+  } catch (err) {
+    logger.error({ err }, 'Failed to upload media to WhatsApp');
+    
+    if (err.message.includes('Unsupported media type')) {
+      return res.status(400).json({ error: err.message });
+    }
+    
+    res.status(500).json({ 
+      error: 'Failed to upload media',
+      message: err.message 
+    });
+  }
+});
+
+/**
+ * Get message status
+ * GET /messages/:messageId/status
+ */
+router.get('/:messageId/status', async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    
+    // This would require implementing status tracking in your database
+    // For now, return a simple response
+    res.json({
+      message_id: messageId,
+      status: 'Status tracking not yet implemented',
+      note: 'Check your database for message status updates from webhooks'
+    });
+    
+  } catch (err) {
+    logger.error({ err, messageId: req.params.messageId }, 'Failed to get message status');
+    res.status(500).json({ error: 'Failed to get message status' });
+  }
+});
+
+/**
+ * Send test message (for development/testing)
+ * POST /messages/test
+ */
+router.post('/test', async (req, res) => {
+  try {
+    const { to } = req.body;
+    
+    if (!to) {
+      return res.status(400).json({ error: 'Phone number (to) required' });
+    }
+    
+    const cleanPhone = validateWhatsAppPhoneNumber(to);
+    const testMessage = `Hello! This is a test message from Boztell Backend at ${new Date().toLocaleString('id-ID')}. Your phone number: ${cleanPhone}`;
+    
+    const result = await sendTextMessage(cleanPhone, testMessage);
+    
+    logger.info({ 
+      to: cleanPhone,
+      messageId: result.messages?.[0]?.id 
+    }, 'Test message sent successfully');
+    
+    res.json({
+      success: true,
+      message: 'Test message sent successfully',
+      to: cleanPhone,
+      whatsapp_message_id: result.messages?.[0]?.id,
+      text: testMessage
+    });
+    
+  } catch (err) {
+    logger.error({ err, body: req.body }, 'Failed to send test message');
+    res.status(500).json({ 
+      error: 'Failed to send test message',
+      message: err.message 
+    });
+  }
+});
+
+export const messagesRouter = router;

@@ -292,7 +292,176 @@
 			]
 		},
 		{
-			"name": "4. Device Management",
+			"name": "4. Send Messages to WhatsApp (NEW - REAL MESSAGING)",
+			"item": [
+				{
+					"name": "Send Test Message",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"to\": \"{{testPhoneNumber}}\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/messages/test",
+							"host": ["{{baseUrl}}"],
+							"path": ["messages", "test"]
+						}
+					}
+				},
+				{
+					"name": "Send Custom Text Message",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"to\": \"{{testPhoneNumber}}\",\n  \"text\": \"Hello! This is a custom message from Boztell Backend 🚀\",\n  \"type\": \"text\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/messages/send",
+							"host": ["{{baseUrl}}"],
+							"path": ["messages", "send"]
+						}
+					}
+				},
+				{
+					"name": "Send Template Message",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"to\": \"{{testPhoneNumber}}\",\n  \"text\": \"Template message placeholder\",\n  \"type\": \"template\",\n  \"templateName\": \"hello_world\",\n  \"languageCode\": \"en\",\n  \"parameters\": []\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/messages/send",
+							"host": ["{{baseUrl}}"],
+							"path": ["messages", "send"]
+						}
+					}
+				},
+				{
+					"name": "Upload and Send Media File",
+					"description": "Upload and send media file in one request. Instructions: 1. Go to Body tab 2. Select 'form-data' 3. Add key 'media' (type: File) and select file 4. Add key 'to' (type: Text) with phone number 5. Optional: Add 'caption' for text description 6. Send request. One-step upload and send to customer.",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "media",
+									"type": "file",
+									"src": [],
+									"description": "Select image, video, audio, or document file"
+								},
+								{
+									"key": "to",
+									"value": "{{testPhoneNumber}}",
+									"type": "text"
+								},
+								{
+									"key": "caption",
+									"value": "Test media from Boztell Backend!",
+									"type": "text",
+									"description": "Caption for image/video (optional)"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{baseUrl}}/messages/send-media-file",
+							"host": ["{{baseUrl}}"],
+							"path": ["messages", "send-media-file"]
+						}
+					}
+				},
+				{
+					"name": "Upload Media (Get ID)",
+					"description": "Upload media file to WhatsApp and get media ID. Instructions: 1. Go to Body tab 2. Select 'form-data' 3. Add key 'media' (type: File) 4. Select any image/document file 5. Send request. Supported: Images (JPG, PNG, WebP max 5MB), Documents (PDF, DOC, DOCX max 100MB), Audio (AAC, MP3, OGG max 16MB), Video (MP4, 3GP max 16MB)",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "media",
+									"type": "file",
+									"src": [],
+									"description": "Upload media to get WhatsApp media ID"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{baseUrl}}/messages/upload-media",
+							"host": ["{{baseUrl}}"],
+							"path": ["messages", "upload-media"]
+						}
+					}
+				},
+				{
+					"name": "Send Media by ID",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"to\": \"{{testPhoneNumber}}\",\n  \"mediaType\": \"image\",\n  \"mediaId\": \"MEDIA_ID_FROM_UPLOAD\",\n  \"caption\": \"Image sent using media ID\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/messages/send-media",
+							"host": ["{{baseUrl}}"],
+							"path": ["messages", "send-media"]
+						}
+					}
+				},
+				{
+					"name": "Send Media by URL",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"to\": \"{{testPhoneNumber}}\",\n  \"mediaType\": \"image\",\n  \"mediaUrl\": \"https://picsum.photos/800/600.jpg\",\n  \"caption\": \"Random image from Picsum via URL\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/messages/send-media",
+							"host": ["{{baseUrl}}"],
+							"path": ["messages", "send-media"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "5. Device Management",
 			"item": [
 				{
 					"name": "Register Device Token",
