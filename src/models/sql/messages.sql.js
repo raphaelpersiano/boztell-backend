@@ -1,8 +1,8 @@
 // Plain SQL strings to keep logic in services clean
 export const SQL = {
   insertMessage: `
-    INSERT INTO messages (id, room_id, sender_id, sender, content_type, content_text, wa_message_id, created_at)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+    INSERT INTO messages (id, room_id, sender_id, sender, content_type, content_text, wa_message_id, metadata, created_at)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
     RETURNING *;
   `,
   getRoomParticipants: `

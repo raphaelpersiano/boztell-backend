@@ -27,18 +27,53 @@ export function createWebhookRouter(io) {
     }
 
     const body = req.body;
+    
     try {
       const results = await routeWhatsAppWebhook({ io, body });
+      
+      // Check if any processing failed
+      const hasErrors = results.some(result => result.error || result.success === false);
+      
+      if (hasErrors) {
+        const errors = results.filter(r => r.error || r.success === false);
+        logger.error({ 
+          errors,
+          processedCount: results.length - errors.length,
+          totalCount: results.length
+        }, 'Some webhook events failed to process');
+        
+        // Return 500 if any critical processing failed
+        return res.status(500).json({ 
+          error: 'Some events failed to process',
+          processed: results.length - errors.length,
+          failed: errors.length,
+          errors: errors.map(e => e.error || 'Processing failed')
+        });
+      }
       
       logger.info({ 
         processedCount: results.length,
         entryCount: body.entry?.length || 0 
-      }, 'WhatsApp webhook processed');
+      }, 'WhatsApp webhook processed successfully');
       
-      res.sendStatus(200);
+      // Return success with processing details
+      res.status(200).json({
+        success: true,
+        processed: results.length,
+        results: results.map(r => ({
+          type: r.type,
+          room_id: r.room_id,
+          message_id: r.message_id,
+          wa_message_id: r.wa_message_id
+        }))
+      });
+      
     } catch (err) {
       logger.error({ err, body }, 'Failed processing WhatsApp webhook');
-      res.sendStatus(500);
+      res.status(500).json({ 
+        error: 'Webhook processing failed',
+        message: err.message 
+      });
     }
   });
 

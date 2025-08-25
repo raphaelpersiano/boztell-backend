@@ -73,61 +73,85 @@ async function processMessagesField(io, value) {
  * Process individual incoming message based on type
  */
 async function processIncomingMessage(io, message, value) {
-  const { type, from, id: wa_message_id, timestamp } = message;
-  const contacts = value.contacts || [];
-  const metadata = value.metadata || {};
-  
-  // Find contact info
-  const contact = contacts.find(c => c.wa_id === from) || {};
-  const senderName = contact.profile?.name || from;
-  
-  // Determine room_id (customize based on your business logic)
-  const roomId = determineRoomId(from, metadata);
-  
-  const baseMessage = {
-    room_id: roomId,
-    sender_id: from,
-    sender: senderName,
-    wa_message_id,
-    timestamp: parseInt(timestamp) * 1000, // Convert to milliseconds
-    type
-  };
-  
-  switch (type) {
-    case 'text':
-      return await handleTextMessage(io, { ...baseMessage, text: message.text });
-      
-    case 'image':
-    case 'video':
-    case 'audio':
-    case 'document':
-    case 'sticker':
-      return await handleMediaMessage(io, { ...baseMessage, media: message[type] });
-      
-    case 'location':
-      return await handleLocationMessage(io, { ...baseMessage, location: message.location });
-      
-    case 'contacts':
-      return await handleContactsMessage(io, { ...baseMessage, contacts: message.contacts });
-      
-    case 'interactive':
-      return await handleInteractiveMessage(io, { ...baseMessage, interactive: message.interactive });
-      
-    case 'button':
-      return await handleButtonMessage(io, { ...baseMessage, button: message.button });
-      
-    case 'order':
-      return await handleOrderMessage(io, { ...baseMessage, order: message.order });
-      
-    case 'system':
-      return await handleSystemEvent({ ...baseMessage, system: message.system });
-      
-    case 'referral':
-      return await handleReferralMessage(io, { ...baseMessage, referral: message.referral });
-      
-    default:
-      logger.warn({ type, message }, 'Unknown message type received');
-      return { type: 'unknown', message_type: type };
+  try {
+    const { type, from, id: wa_message_id, timestamp } = message;
+    const contacts = value.contacts || [];
+    const metadata = value.metadata || {};
+    
+    // Find contact info
+    const contact = contacts.find(c => c.wa_id === from) || {};
+    const senderName = contact.profile?.name || from;
+    
+    // Determine room_id (customize based on your business logic)
+    const roomId = determineRoomId(from, metadata);
+    
+    const baseMessage = {
+      room_id: roomId,
+      sender_id: from,
+      sender: senderName,
+      wa_message_id,
+      timestamp: parseInt(timestamp) * 1000, // Convert to milliseconds
+      type
+    };
+    
+    logger.info({ 
+      type, 
+      from, 
+      roomId, 
+      wa_message_id 
+    }, 'Processing incoming WhatsApp message');
+    
+    switch (type) {
+      case 'text':
+        return await handleTextMessage(io, { ...baseMessage, text: message.text });
+        
+      case 'image':
+      case 'video':
+      case 'audio':
+      case 'document':
+      case 'sticker':
+        return await handleMediaMessage(io, { ...baseMessage, media: message[type] });
+        
+      case 'location':
+        return await handleLocationMessage(io, { ...baseMessage, location: message.location });
+        
+      case 'contacts':
+        return await handleContactsMessage(io, { ...baseMessage, contacts: message.contacts });
+        
+      case 'interactive':
+        return await handleInteractiveMessage(io, { ...baseMessage, interactive: message.interactive });
+        
+      case 'button':
+        return await handleButtonMessage(io, { ...baseMessage, button: message.button });
+        
+      case 'order':
+        return await handleOrderMessage(io, { ...baseMessage, order: message.order });
+        
+      case 'system':
+        return await handleSystemEvent({ ...baseMessage, system: message.system });
+        
+      case 'referral':
+        return await handleReferralMessage(io, { ...baseMessage, referral: message.referral });
+        
+      default:
+        logger.warn({ type, message }, 'Unknown message type received');
+        return { 
+          type: 'unknown_message', 
+          success: false,
+          error: `Unknown message type: ${type}`,
+          room_id: roomId,
+          wa_message_id
+        };
+    }
+    
+  } catch (err) {
+    logger.error({ err, message }, 'Failed to process incoming message');
+    return {
+      type: 'message_processing_error',
+      success: false,
+      error: err.message,
+      wa_message_id: message?.id
+    };
   }
 }
 
@@ -135,15 +159,38 @@ async function processIncomingMessage(io, message, value) {
  * Handle text messages
  */
 async function handleTextMessage(io, messageData) {
-  return await handleIncomingMessage({ io }, {
-    room_id: messageData.room_id,
-    sender_id: messageData.sender_id,
-    sender: messageData.sender,
-    content_type: 'text',
-    content_text: messageData.text.body,
-    wa_message_id: messageData.wa_message_id,
-    metadata: { timestamp: messageData.timestamp }
-  });
+  try {
+    const result = await handleIncomingMessage({ io }, {
+      room_id: messageData.room_id,
+      sender_id: messageData.sender_id,
+      sender: messageData.sender,
+      content_type: 'text',
+      content_text: messageData.text.body,
+      wa_message_id: messageData.wa_message_id,
+      metadata: { 
+        timestamp: messageData.timestamp,
+        type: 'text'
+      }
+    });
+    
+    return {
+      type: 'text_message',
+      success: true,
+      room_id: messageData.room_id,
+      message_id: result.message_id,
+      wa_message_id: messageData.wa_message_id
+    };
+    
+  } catch (err) {
+    logger.error({ err, messageData }, 'Failed to handle text message');
+    return {
+      type: 'text_message',
+      success: false,
+      error: err.message,
+      room_id: messageData.room_id,
+      wa_message_id: messageData.wa_message_id
+    };
+  }
 }
 
 /**
