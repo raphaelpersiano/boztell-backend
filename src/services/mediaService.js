@@ -57,7 +57,7 @@ export async function handleIncomingMedia({ io }, input) {
     });
     
     // 3. Save to database
-    const message = await saveMediaMessage({
+  const message = await saveMediaMessage({
       id: messageId,
       room_id: input.room_id,
       sender_id: input.sender_id,
@@ -75,12 +75,12 @@ export async function handleIncomingMedia({ io }, input) {
     });
     
     // 4. Emit to Socket.io room
-    io.to(`room:${input.room_id}`).emit('room:new_message', {
+  io.to(`room:${input.room_id}`).emit('room:new_message', {
       room_id: input.room_id,
       message: {
         ...message,
         content_type: 'media',
-        media_url: gcsData.url,
+    media_url: gcsData.url,
         thumbnail_url: await generateThumbnailIfNeeded(gcsData, input.media_type)
       }
     });
@@ -100,11 +100,18 @@ export async function handleIncomingMedia({ io }, input) {
     
     logger.info({ messageId, media_id: input.media_id, room_id: input.room_id }, 'Media message processed successfully');
     
-    return message;
+    return {
+      type: 'media_message',
+      success: true,
+      room_id: input.room_id,
+      message_id: messageId,
+      wa_message_id: input.wa_message_id,
+      public_url: gcsData.url
+    };
     
   } catch (err) {
     logger.error({ err, media_id: input.media_id }, 'Failed to process media message');
-    throw err;
+  throw err;
   }
 }
 

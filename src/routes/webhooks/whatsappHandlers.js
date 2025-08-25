@@ -1,6 +1,7 @@
 import { logger } from '../../utils/logger.js';
 import { handleIncomingMessage } from '../../services/messageService.js';
 import { handleIncomingMedia } from '../../services/mediaService.js';
+import { ensureRoom } from '../../services/roomService.js';
 import { handleMessageStatus } from '../../services/statusService.js';
 import { handleSystemEvent } from '../../services/systemService.js';
 
@@ -85,7 +86,10 @@ async function processIncomingMessage(io, message, value) {
     // Determine room_id (customize based on your business logic)
     const roomId = determineRoomId(from, metadata);
     
-    const baseMessage = {
+  // Ensure room exists
+  await ensureRoom(roomId, { customerPhone: from, customerName: senderName });
+
+  const baseMessage = {
       room_id: roomId,
       sender_id: from,
       sender: senderName,
@@ -110,7 +114,7 @@ async function processIncomingMessage(io, message, value) {
       case 'audio':
       case 'document':
       case 'sticker':
-        return await handleMediaMessage(io, { ...baseMessage, media: message[type] });
+  return await handleMediaMessage(io, { ...baseMessage, media: message[type] });
         
       case 'location':
         return await handleLocationMessage(io, { ...baseMessage, location: message.location });

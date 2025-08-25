@@ -64,7 +64,8 @@ export function createWebhookRouter(io) {
           type: r.type,
           room_id: r.room_id,
           message_id: r.message_id,
-          wa_message_id: r.wa_message_id
+          wa_message_id: r.wa_message_id,
+          public_url: r.public_url || r.media_url || undefined
         }))
       });
       

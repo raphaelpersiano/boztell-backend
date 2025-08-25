@@ -1,7 +1,11 @@
 import express from 'express';
 import multer from 'multer';
+import { v4 as uuidv4 } from 'uuid';
 import { sendTextMessage, sendMediaMessage, sendMediaByUrl, sendTemplateMessage, uploadMediaToWhatsApp } from '../services/whatsappService.js';
 import { validateWhatsAppPhoneNumber } from '../services/whatsappService.js';
+import { uploadBuffer as uploadToGCS } from '../services/storageService.js';
+import { ensureRoom } from '../services/roomService.js';
+import { query } from '../db.js';
 import { logger } from '../utils/logger.js';
 
 const router = express.Router();
@@ -241,6 +245,113 @@ router.post('/send-media-file', upload.single('media'), async (req, res) => {
       error: 'Failed to upload and send media',
       message: err.message 
     });
+  }
+});
+
+/**
+ * Combined flow: upload to GCS + persist DB + upload to WhatsApp + send to WhatsApp
+ * POST /messages/send-media-combined
+ * Form fields: media (file), to (phone), caption (optional), user_id (optional), sender_name (optional)
+ */
+router.post('/send-media-combined', upload.single('media'), async (req, res) => {
+  try {
+    const { to, caption = '', user_id = null, sender_name = 'Operator' } = req.body;
+
+    if (!to) {
+      return res.status(400).json({ error: 'Phone number (to) required' });
+    }
+    if (!req.file) {
+      return res.status(400).json({ error: 'Media file required (field name: media)' });
+    }
+
+    const cleanPhone = validateWhatsAppPhoneNumber(to);
+    const { buffer, originalname, mimetype } = req.file;
+
+    // Determine WhatsApp media type
+    let mediaType;
+    if (mimetype.startsWith('image/')) mediaType = 'image';
+    else if (mimetype.startsWith('video/')) mediaType = 'video';
+    else if (mimetype.startsWith('audio/')) mediaType = 'audio';
+    else mediaType = 'document';
+
+    // Ensure room exists (1 room = 1 phone number)
+    await ensureRoom(cleanPhone, { customerPhone: cleanPhone });
+
+    // 1) Upload to GCS (organized by phone/date)
+    const gcs = await uploadToGCS({
+      buffer,
+      filename: originalname,
+      contentType: mimetype,
+      folder: 'whatsapp-media',
+      roomId: cleanPhone,
+      phoneNumber: cleanPhone
+    });
+
+    // 2) Create DB row first (will update with WA IDs later)
+    const messageId = uuidv4();
+    const insertSql = `
+      INSERT INTO messages (
+        id, room_id, sender_id, sender, content_type, content_text,
+        media_type, media_id, gcs_filename, gcs_url, file_size, mime_type,
+        original_filename, wa_message_id, metadata, created_at
+      ) VALUES (
+        $1, $2, $3, $4, 'media', $5,
+        $6, NULL, $7, $8, $9, $10,
+        $11, NULL, $12, NOW()
+      ) RETURNING *;
+    `;
+    const metadata = { direction: 'outgoing', source: 'api', filename: originalname };
+    const insertParams = [
+      messageId, cleanPhone, (user_id || 'operator'), (sender_name || 'Operator'), caption,
+      mediaType, gcs.gcsFilename, gcs.url, gcs.size, mimetype,
+      originalname, JSON.stringify(metadata)
+    ];
+    const { rows: insertedRows } = await query(insertSql, insertParams);
+
+    // 3) Upload media to WhatsApp to obtain media ID
+    const waUpload = await uploadMediaToWhatsApp({
+      buffer,
+      filename: originalname,
+      mimeType: mimetype
+    });
+
+    // 4) Send WhatsApp message using media ID
+    const sendResult = await sendMediaMessage(cleanPhone, mediaType, waUpload.id, {
+      caption,
+      filename: originalname
+    });
+    const waMessageId = sendResult.messages?.[0]?.id || null;
+
+    // 5) Update the same DB row with WhatsApp IDs
+    const updateSql = `
+      UPDATE messages
+      SET media_id = $1, wa_message_id = $2, updated_at = NOW()
+      WHERE id = $3
+      RETURNING *;
+    `;
+    const { rows: updatedRows } = await query(updateSql, [waUpload.id, waMessageId, messageId]);
+    const saved = updatedRows[0] || insertedRows[0];
+
+    logger.info({
+      to: cleanPhone,
+      mediaType,
+      mediaId: waUpload.id,
+      waMessageId,
+      gcsFilename: gcs.gcsFilename
+    }, 'Combined media flow successful');
+
+    return res.json({
+      success: true,
+      to: cleanPhone,
+      mediaType,
+      message_id: saved.id,
+      whatsapp_media_id: waUpload.id,
+      whatsapp_message_id: waMessageId,
+      public_url: gcs.url
+    });
+  } catch (err) {
+    logger.error({ err }, 'Failed combined media flow');
+    return res.status(500).json({ error: 'Failed to upload and send media', message: err.message });
   }
 });
 
