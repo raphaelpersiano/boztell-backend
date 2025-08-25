@@ -87,9 +87,9 @@ app.use((req, res) => {
   res.status(404).json({ error: 'Endpoint not found' });
 });
 
-server.listen(config.port, () => {
-  logger.info(`Boztell Backend v2.0.0 listening on port ${config.port}`);
+server.listen(config.port, config.host, () => {
+  logger.info(`Boztell Backend v2.0.0 listening on ${config.host}:${config.port}`);
   logger.info(`Environment: ${config.env}`);
-  logger.info(`Health check: http://localhost:${config.port}/health`);
-  logger.info(`API info: http://localhost:${config.port}/api`);
+  logger.info(`Health check: http://${config.host}:${config.port}/health`);
+  logger.info(`API info: http://${config.host}:${config.port}/api`);
 });

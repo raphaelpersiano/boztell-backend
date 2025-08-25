@@ -1,0 +1,321 @@
+{
+	"info": {
+		"_postman_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+		"name": "Boztell WhatsApp Backend - CORRECT ENDPOINTS",
+		"description": "CORRECTED Postman collection untuk testing Boztell WhatsApp Backend API.\n\n🚨 FIXES APPLIED:\n- Webhook: /webhook/whatsapp (✅ benar)\n- Media: /media/* (❌ fixed dari /api/media/*)\n- Removed: /api/test/* dan /api/system/* (tidak ada di codebase)\n- Health: /health dan /api (✅ benar)\n\nEndpoints yang benar-benar ada di codebase.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "1. Health & Info",
+			"item": [
+				{
+					"name": "Health Check",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/health",
+							"host": ["{{baseUrl}}"],
+							"path": ["health"]
+						}
+					}
+				},
+				{
+					"name": "API Info",
+					"request": {
+						"method": "GET", 
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api",
+							"host": ["{{baseUrl}}"],
+							"path": ["api"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "2. WhatsApp Webhook",
+			"item": [
+				{
+					"name": "Webhook Verification",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/webhook/whatsapp?hub.mode=subscribe&hub.challenge=test123&hub.verify_token={{webhookVerifyToken}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["webhook", "whatsapp"],
+							"query": [
+								{
+									"key": "hub.mode",
+									"value": "subscribe"
+								},
+								{
+									"key": "hub.challenge", 
+									"value": "test123"
+								},
+								{
+									"key": "hub.verify_token",
+									"value": "{{webhookVerifyToken}}"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Incoming Text Message",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"object\": \"whatsapp_business_account\",\n  \"entry\": [\n    {\n      \"id\": \"{{whatsappBusinessAccountId}}\",\n      \"changes\": [\n        {\n          \"value\": {\n            \"messaging_product\": \"whatsapp\",\n            \"metadata\": {\n              \"display_phone_number\": \"{{businessDisplayNumber}}\",\n              \"phone_number_id\": \"{{businessPhoneId}}\"\n            },\n            \"messages\": [\n              {\n                \"from\": \"{{testPhoneNumber}}\",\n                \"id\": \"wamid.test_text_{{$timestamp}}\",\n                \"timestamp\": \"{{$timestamp}}\",\n                \"text\": {\n                  \"body\": \"Hello from authorized test number! Testing text message.\"\n                },\n                \"type\": \"text\"\n              }\n            ]\n          },\n          \"field\": \"messages\"\n        }\n      ]\n    }\n  ]\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/webhook/whatsapp",
+							"host": ["{{baseUrl}}"],
+							"path": ["webhook", "whatsapp"]
+						}
+					}
+				},
+				{
+					"name": "Incoming Image Message",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"object\": \"whatsapp_business_account\",\n  \"entry\": [\n    {\n      \"id\": \"{{whatsappBusinessAccountId}}\",\n      \"changes\": [\n        {\n          \"value\": {\n            \"messaging_product\": \"whatsapp\",\n            \"metadata\": {\n              \"display_phone_number\": \"{{businessDisplayNumber}}\",\n              \"phone_number_id\": \"{{businessPhoneId}}\"\n            },\n            \"messages\": [\n              {\n                \"from\": \"{{testPhoneNumber}}\",\n                \"id\": \"wamid.test_image_{{$timestamp}}\",\n                \"timestamp\": \"{{$timestamp}}\",\n                \"type\": \"image\",\n                \"image\": {\n                  \"id\": \"test_media_id_123\",\n                  \"mime_type\": \"image/jpeg\",\n                  \"sha256\": \"test_sha256_hash\",\n                  \"caption\": \"Test image from authorized number\"\n                }\n              }\n            ]\n          },\n          \"field\": \"messages\"\n        }\n      ]\n    }\n  ]\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/webhook/whatsapp",
+							"host": ["{{baseUrl}}"],
+							"path": ["webhook", "whatsapp"]
+						}
+					}
+				},
+				{
+					"name": "Message Status Update",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"object\": \"whatsapp_business_account\",\n  \"entry\": [\n    {\n      \"id\": \"{{whatsappBusinessAccountId}}\",\n      \"changes\": [\n        {\n          \"value\": {\n            \"messaging_product\": \"whatsapp\",\n            \"metadata\": {\n              \"display_phone_number\": \"{{businessDisplayNumber}}\",\n              \"phone_number_id\": \"{{businessPhoneId}}\"\n            },\n            \"statuses\": [\n              {\n                \"id\": \"wamid.test_message_status_{{$timestamp}}\",\n                \"status\": \"delivered\",\n                \"timestamp\": \"{{$timestamp}}\",\n                \"recipient_id\": \"{{testPhoneNumber}}\"\n              }\n            ]\n          },\n          \"field\": \"messages\"\n        }\n      ]\n    }\n  ]\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/webhook/whatsapp",
+							"host": ["{{baseUrl}}"],
+							"path": ["webhook", "whatsapp"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "3. Media Management (FIXED - no /api prefix)",
+			"item": [
+				{
+					"name": "Upload Media File", 
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "file",
+									"type": "file",
+									"src": []
+								},
+								{
+									"key": "room_id",
+									"value": "{{testPhoneNumber}}",
+									"type": "text"
+								},
+								{
+									"key": "uploadToWhatsApp",
+									"value": "false",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{baseUrl}}/media/upload",
+							"host": ["{{baseUrl}}"],
+							"path": ["media", "upload"]
+						}
+					}
+				},
+				{
+					"name": "List Media Files",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/media/list?phone={{testPhoneNumber}}&date={{testDate}}&folder=media",
+							"host": ["{{baseUrl}}"],
+							"path": ["media", "list"],
+							"query": [
+								{
+									"key": "phone",
+									"value": "{{testPhoneNumber}}"
+								},
+								{
+									"key": "date", 
+									"value": "{{testDate}}"
+								},
+								{
+									"key": "folder",
+									"value": "media"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Get Media Dates",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/media/dates?phone={{testPhoneNumber}}&folder=media",
+							"host": ["{{baseUrl}}"],
+							"path": ["media", "dates"],
+							"query": [
+								{
+									"key": "phone",
+									"value": "{{testPhoneNumber}}"
+								},
+								{
+									"key": "folder",
+									"value": "media"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Get Media Stats",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/media/stats?phone={{testPhoneNumber}}&folder=media",
+							"host": ["{{baseUrl}}"],
+							"path": ["media", "stats"],
+							"query": [
+								{
+									"key": "phone",
+									"value": "{{testPhoneNumber}}"
+								},
+								{
+									"key": "folder",
+									"value": "media"
+								}
+							]
+						}
+					}
+				},
+				{
+					"name": "Upload to WhatsApp Only",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "file",
+									"type": "file",
+									"src": []
+								}
+							]
+						},
+						"url": {
+							"raw": "{{baseUrl}}/media/whatsapp-upload",
+							"host": ["{{baseUrl}}"],
+							"path": ["media", "whatsapp-upload"]
+						}
+					}
+				},
+				{
+					"name": "Get Media File Info",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/media/test-file-id-123",
+							"host": ["{{baseUrl}}"],
+							"path": ["media", "test-file-id-123"]
+						}
+					}
+				},
+				{
+					"name": "Refresh Media URL",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/media/test-file-id-123/refresh-url",
+							"host": ["{{baseUrl}}"],
+							"path": ["media", "test-file-id-123", "refresh-url"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "4. Device Management",
+			"item": [
+				{
+					"name": "Register Device Token",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"user_id\": \"test_user_{{$timestamp}}\",\n  \"device_token\": \"test_firebase_token_{{$timestamp}}\",\n  \"platform\": \"android\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/devices/register",
+							"host": ["{{baseUrl}}"],
+							"path": ["devices", "register"]
+						}
+					}
+				}
+			]
+		}
+	]
+}
