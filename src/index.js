@@ -25,29 +25,61 @@ app.use(express.json({
   verify: (req, res, buf) => { req.rawBody = buf; }
 }));
 
-// Health check
-app.get('/health', (req, res) => res.json({ 
-  ok: true, 
-  timestamp: new Date().toISOString(),
-  version: '2.0.0'
-}));
+// Health check - More comprehensive for Cloud Run
+app.get('/health', async (req, res) => {
+  try {
+    // Basic health check
+    const health = {
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      version: '2.0.0',
+      environment: config.env,
+      port: config.port,
+      host: config.host
+    };
+    
+    // Optional: Add database connectivity check
+    try {
+      const { query } = await import('./db.js');
+      await query('SELECT 1');
+      health.database = 'connected';
+    } catch (dbErr) {
+      health.database = 'disconnected';
+      health.warnings = health.warnings || [];
+      health.warnings.push('Database connection failed');
+    }
+    
+    res.status(200).json(health);
+  } catch (err) {
+    logger.error({ err }, 'Health check failed');
+    res.status(500).json({
+      status: 'error',
+      timestamp: new Date().toISOString(),
+      error: err.message
+    });
+  }
+});
 
 const server = http.createServer(app);
 const io = setupSocket(server);
 
 // Initialize services
-try {
-  initializeFirebase();
-  logger.info('Firebase Admin SDK initialized');
-} catch (err) {
-  logger.warn({ err }, 'Firebase initialization failed - push notifications disabled');
-}
+async function initializeServices() {
+  try {
+    logger.info('Initializing Firebase Admin SDK...');
+    initializeFirebase();
+    logger.info('Firebase Admin SDK initialized');
+  } catch (err) {
+    logger.warn({ err }, 'Firebase initialization failed - push notifications disabled');
+  }
 
-try {
-  initializeStorage();
-  logger.info('Google Cloud Storage initialized');
-} catch (err) {
-  logger.warn({ err }, 'GCS initialization failed - media storage disabled');
+  try {
+    logger.info('Initializing Google Cloud Storage...');
+    initializeStorage();
+    logger.info('Google Cloud Storage initialized');
+  } catch (err) {
+    logger.warn({ err }, 'GCS initialization failed - media storage disabled');
+  }
 }
 
 // Routes
@@ -92,9 +124,49 @@ app.use((req, res) => {
   res.status(404).json({ error: 'Endpoint not found' });
 });
 
-server.listen(config.port, config.host, () => {
-  logger.info(`Boztell Backend v2.0.0 listening on ${config.host}:${config.port}`);
-  logger.info(`Environment: ${config.env}`);
-  logger.info(`Health check: http://localhost:${config.port}/health`);
-  logger.info(`API info: http://localhost:${config.port}/api`);
+// Start server with proper error handling
+async function startServer() {
+  try {
+    // Initialize services first
+    await initializeServices();
+    
+    // Start HTTP server
+    server.listen(config.port, config.host, () => {
+      logger.info(`Boztell Backend v2.0.0 listening on ${config.host}:${config.port}`);
+      logger.info(`Environment: ${config.env}`);
+      logger.info(`Health check: http://${config.host === '0.0.0.0' ? 'localhost' : config.host}:${config.port}/health`);
+      logger.info(`API info: http://${config.host === '0.0.0.0' ? 'localhost' : config.host}:${config.port}/api`);
+      logger.info('Server started successfully');
+    });
+    
+    // Handle server errors
+    server.on('error', (err) => {
+      logger.error({ err, port: config.port, host: config.host }, 'Server failed to start');
+      process.exit(1);
+    });
+    
+  } catch (err) {
+    logger.error({ err }, 'Failed to start server');
+    process.exit(1);
+  }
+}
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  logger.info('SIGTERM received, shutting down gracefully');
+  server.close(() => {
+    logger.info('Server closed');
+    process.exit(0);
+  });
 });
+
+process.on('SIGINT', () => {
+  logger.info('SIGINT received, shutting down gracefully');
+  server.close(() => {
+    logger.info('Server closed');
+    process.exit(0);
+  });
+});
+
+// Start the server
+startServer();
