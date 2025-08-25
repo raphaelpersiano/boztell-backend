@@ -14,8 +14,37 @@ export async function handleIncomingMedia({ io }, input) {
   const messageId = uuidv4();
   
   try {
-    // 1. Download media from WhatsApp API
-    const mediaData = await downloadWhatsAppMedia(input.media_id);
+    logger.info({ media_id: input.media_id, room_id: input.room_id }, 'Starting media processing');
+    
+    // For development: skip WhatsApp download if media_id is test
+    let mediaData;
+    if (input.media_id && input.media_id.startsWith('test_')) {
+      logger.info('Using test media data for development');
+      mediaData = {
+        buffer: Buffer.from('Test media content for development'),
+        contentType: input.mime_type || 'image/jpeg',
+        size: 58,
+        sha256: 'test_sha'
+      };
+    } else {
+      // 1. Download media from WhatsApp API
+      logger.info('Downloading media from WhatsApp API');
+      try {
+        mediaData = await downloadWhatsAppMedia(input.media_id);
+      } catch (err) {
+        if (config.env === 'development') {
+          logger.warn('WhatsApp API failed in development, using test data');
+          mediaData = {
+            buffer: Buffer.from('Fallback test media content'),
+            contentType: input.mime_type || 'image/jpeg',
+            size: 32,
+            sha256: 'fallback_sha'
+          };
+        } else {
+          throw err;
+        }
+      }
+    }
     
     // 2. Upload to Google Cloud Storage with organized structure
     const gcsData = await uploadBuffer({

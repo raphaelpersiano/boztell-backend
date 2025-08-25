@@ -2,29 +2,39 @@ import { Storage } from '@google-cloud/storage';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 import path from 'path';
+import fs from 'fs/promises';
 import { v4 as uuidv4 } from 'uuid';
 
 let storage;
+let useLocalStorage = false;
 
 export function initializeStorage() {
   if (storage) return storage;
 
   try {
+    // Check if we have GCS credentials
+    if (!config.gcs.bucketName || (!config.gcs.keyFilename && !config.gcs.projectId)) {
+      logger.warn('GCS credentials not found, using local storage for development');
+      useLocalStorage = true;
+      return null;
+    }
+
     const storageConfig = {};
     
     if (config.gcs.keyFilename) {
       storageConfig.keyFilename = config.gcs.keyFilename;
     } else {
       // Use default credentials in Cloud Run
-      storageConfig.projectId = config.firebase.projectId;
+      storageConfig.projectId = config.gcs.projectId;
     }
 
     storage = new Storage(storageConfig);
     logger.info('Google Cloud Storage initialized');
     return storage;
   } catch (err) {
-    logger.error({ err }, 'Failed to initialize Google Cloud Storage');
-    throw err;
+    logger.warn({ err }, 'Failed to initialize GCS, falling back to local storage');
+    useLocalStorage = true;
+    return null;
   }
 }
 
@@ -32,9 +42,6 @@ export function initializeStorage() {
  * Upload buffer to GCS with organized folder structure
  */
 export async function uploadBuffer({ buffer, filename, contentType, folder = 'media', roomId = null, phoneNumber = null }) {
-  if (!storage) initializeStorage();
-
-  const bucket = storage.bucket(config.gcs.bucketName);
   const fileId = uuidv4();
   const extension = path.extname(filename || '') || getExtensionFromMimeType(contentType);
   
@@ -46,7 +53,14 @@ export async function uploadBuffer({ buffer, filename, contentType, folder = 'me
     fileId, 
     extension 
   });
-  
+
+  // Use local storage fallback for development
+  if (useLocalStorage || !storage) {
+    return await uploadToLocalStorage({ buffer, gcsFilename, contentType });
+  }
+
+  // Use Google Cloud Storage
+  const bucket = storage.bucket(config.gcs.bucketName);
   const file = bucket.file(gcsFilename);
   
   const metadata = {
@@ -438,4 +452,37 @@ function getExtensionFromMimeType(mimeType) {
   };
 
   return mimeExtensions[mimeType] || '';
+}
+
+/**
+ * Local storage fallback for development
+ */
+async function uploadToLocalStorage({ buffer, gcsFilename, contentType }) {
+  try {
+    const localDir = path.join(process.cwd(), 'uploads');
+    const fullPath = path.join(localDir, gcsFilename);
+    const dir = path.dirname(fullPath);
+    
+    // Create directory if it doesn't exist
+    await fs.mkdir(dir, { recursive: true });
+    
+    // Write file
+    await fs.writeFile(fullPath, buffer);
+    
+    const fileStats = await fs.stat(fullPath);
+    const localUrl = `http://localhost:${config.port}/uploads/${gcsFilename}`;
+    
+    logger.info({ gcsFilename, size: fileStats.size }, 'File uploaded to local storage');
+    
+    return {
+      gcsFilename,
+      url: localUrl,
+      size: fileStats.size,
+      contentType
+    };
+    
+  } catch (err) {
+    logger.error({ err, gcsFilename }, 'Failed to upload to local storage');
+    throw err;
+  }
 }

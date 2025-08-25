@@ -15,8 +15,9 @@ export const config = {
 
   // Google Cloud Storage
   gcs: {
-    bucketName: process.env.GCS_BUCKET_NAME,
-    keyFilename: process.env.GOOGLE_APPLICATION_CREDENTIALS // Service account key file path
+    bucketName: process.env.GCS_BUCKET_NAME || 'boztell-media-dev',
+    keyFilename: process.env.GOOGLE_APPLICATION_CREDENTIALS, // Service account key file path
+    projectId: process.env.GOOGLE_CLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID
   },
 
   whatsapp: {

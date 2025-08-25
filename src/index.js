@@ -17,6 +17,8 @@ const app = express();
 
 app.use(helmet());
 app.use(cors());
+// Serve uploaded files for development
+app.use('/uploads', express.static('uploads'));
 // Use express.json with a verify function to retain the raw body for signature validation
 app.use(express.json({
   limit: '1mb',
