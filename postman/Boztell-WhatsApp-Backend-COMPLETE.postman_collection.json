@@ -1,0 +1,536 @@
+{
+	"info": {
+		"_postman_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+		"name": "Boztell WhatsApp Backend - COMPLETE API TESTING",
+		"description": "COMPLETE Postman collection untuk testing Boztell WhatsApp Backend API.\n\n📋 INCLUDES:\n✅ Webhook endpoints (incoming messages)\n✅ Media management\n✅ Outgoing messages: TEXT, LOCATION, REPLY, REACTION\n✅ Device management\n✅ Health check\n\n🚀 NEW FEATURES:\n- Send Location Messages\n- Send Reply Messages\n- Send Reaction Messages\n- Complete testing workflow\n\nSemua endpoints sudah diverifikasi sesuai codebase.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{ "key": "baseUrl", "value": "http://localhost:8080" },
+		{ "key": "webhookVerifyToken", "value": "test_token" },
+		{ "key": "whatsappBusinessAccountId", "value": "1234567890" },
+		{ "key": "businessDisplayNumber", "value": "15551234567" },
+		{ "key": "businessPhoneId", "value": "123456789012345" },
+		{ "key": "testPhoneNumber", "value": "15559876543" },
+		{ "key": "testDate", "value": "2025-08-26" },
+		{ "key": "sampleLatitude", "value": "-6.2088" },
+		{ "key": "sampleLongitude", "value": "106.8456" },
+		{ "key": "sampleLocationName", "value": "Monas Jakarta" },
+		{ "key": "sampleLocationAddress", "value": "Jl. Silang Monas, Gambir, Jakarta Pusat" },
+		{ "key": "reactionEmoji", "value": "👍" },
+		{ "key": "repliedWaMessageId", "value": "SET_THIS_FROM_PREVIOUS_MESSAGE_RESPONSE" },
+		{ "key": "reactionTargetWaMessageId", "value": "SET_THIS_FROM_PREVIOUS_MESSAGE_RESPONSE" }
+	],
+	"item": [
+		{
+			"name": "1. Health Check",
+			"item": [
+				{
+					"name": "Basic Health Check",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/health",
+							"host": ["{{baseUrl}}"],
+							"path": ["health"]
+						}
+					}
+				},
+				{
+					"name": "API Root",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api",
+							"host": ["{{baseUrl}}"],
+							"path": ["api"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "2. WhatsApp Webhook (Incoming Messages)",
+			"item": [
+				{
+					"name": "Webhook Verification",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/webhook/whatsapp?hub.mode=subscribe&hub.challenge=test123&hub.verify_token={{webhookVerifyToken}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["webhook", "whatsapp"],
+							"query": [
+								{ "key": "hub.mode", "value": "subscribe" },
+								{ "key": "hub.challenge", "value": "test123" },
+								{ "key": "hub.verify_token", "value": "{{webhookVerifyToken}}" }
+							]
+						}
+					}
+				},
+				{
+					"name": "Incoming Text Message",
+					"request": {
+						"method": "POST",
+						"header": [ { "key": "Content-Type", "value": "application/json" } ],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"object\": \"whatsapp_business_account\",\n  \"entry\": [\n    {\n      \"id\": \"{{whatsappBusinessAccountId}}\",\n      \"changes\": [\n        {\n          \"value\": {\n            \"messaging_product\": \"whatsapp\",\n            \"metadata\": {\n              \"display_phone_number\": \"{{businessDisplayNumber}}\",\n              \"phone_number_id\": \"{{businessPhoneId}}\"\n            },\n            \"messages\": [\n              {\n                \"from\": \"{{testPhoneNumber}}\",\n                \"id\": \"wamid.test_text_{{$timestamp}}\",\n                \"timestamp\": \"{{$timestamp}}\",\n                \"text\": {\n                  \"body\": \"Hello from customer! This is an incoming text message.\"\n                },\n                \"type\": \"text\"\n              }\n            ]\n          },\n          \"field\": \"messages\"\n        }\n      ]\n    }\n  ]\n}"
+						},
+						"url": { "raw": "{{baseUrl}}/webhook/whatsapp", "host": ["{{baseUrl}}"], "path": ["webhook", "whatsapp"] }
+					}
+				}
+			]
+		},
+		{
+			"name": "3. Outgoing Messages - TEXT & BASIC",
+			"item": [
+				{
+					"name": "Send Test Message",
+					"description": "Kirim pesan test sederhana ke nomor WhatsApp",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"to\": \"{{testPhoneNumber}}\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/messages/test",
+							"host": ["{{baseUrl}}"],
+							"path": ["messages", "test"]
+						}
+					}
+				},
+				{
+					"name": "Send Custom Text Message",
+					"description": "Kirim pesan teks kustom ke nomor WhatsApp. Simpan wa_message_id dari response untuk testing reply/reaction.",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"to\": \"{{testPhoneNumber}}\",\n  \"text\": \"Hello! This is a custom message from Boztell Backend 🚀\\n\\nSimpan wa_message_id dari response untuk testing reply dan reaction!\",\n  \"type\": \"text\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/messages/send",
+							"host": ["{{baseUrl}}"],
+							"path": ["messages", "send"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "4. Outgoing Messages - LOCATION",
+			"item": [
+				{
+					"name": "Send Location - Monas Jakarta",
+					"description": "Kirim lokasi Monas Jakarta dengan koordinat, nama, dan alamat lengkap",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"to\": \"{{testPhoneNumber}}\",\n  \"type\": \"location\",\n  \"location\": {\n    \"latitude\": {{sampleLatitude}},\n    \"longitude\": {{sampleLongitude}},\n    \"name\": \"{{sampleLocationName}}\",\n    \"address\": \"{{sampleLocationAddress}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/messages/send",
+							"host": ["{{baseUrl}}"],
+							"path": ["messages", "send"]
+						}
+					}
+				},
+				{
+					"name": "Send Location - Grand Indonesia Mall",
+					"description": "Kirim lokasi Grand Indonesia Mall sebagai contoh lokasi berbeda",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"to\": \"{{testPhoneNumber}}\",\n  \"type\": \"location\",\n  \"location\": {\n    \"latitude\": -6.1951,\n    \"longitude\": 106.8231,\n    \"name\": \"Grand Indonesia Mall\",\n    \"address\": \"Jl. M.H. Thamrin No.1, Menteng, Jakarta Pusat\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/messages/send",
+							"host": ["{{baseUrl}}"],
+							"path": ["messages", "send"]
+						}
+					}
+				},
+				{
+					"name": "Send Location - Coordinates Only",
+					"description": "Kirim lokasi hanya dengan koordinat tanpa nama dan alamat",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"to\": \"{{testPhoneNumber}}\",\n  \"type\": \"location\",\n  \"location\": {\n    \"latitude\": -6.2088,\n    \"longitude\": 106.8456\n  }\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/messages/send",
+							"host": ["{{baseUrl}}"],
+							"path": ["messages", "send"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "5. Outgoing Messages - REPLY",
+			"item": [
+				{
+					"name": "Send Reply Message",
+					"description": "Balas pesan sebelumnya. INSTRUKSI: 1) Kirim pesan text dulu, 2) Copy wa_message_id dari response, 3) Paste di variable repliedWaMessageId, 4) Jalankan request ini",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"to\": \"{{testPhoneNumber}}\",\n  \"text\": \"This is a reply to your previous message! 💬\",\n  \"type\": \"text\",\n  \"context\": {\n    \"message_id\": \"{{repliedWaMessageId}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/messages/send",
+							"host": ["{{baseUrl}}"],
+							"path": ["messages", "send"]
+						}
+					}
+				},
+				{
+					"name": "Send Reply with Custom Text",
+					"description": "Reply dengan teks kustom. Update repliedWaMessageId variable dulu!",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"to\": \"{{testPhoneNumber}}\",\n  \"text\": \"Terima kasih atas pertanyaan Anda! Tim support akan segera merespon. 🙏\",\n  \"type\": \"text\",\n  \"context\": {\n    \"message_id\": \"{{repliedWaMessageId}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/messages/send",
+							"host": ["{{baseUrl}}"],
+							"path": ["messages", "send"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "6. Outgoing Messages - REACTION",
+			"item": [
+				{
+					"name": "Send Thumbs Up Reaction",
+					"description": "Beri reaction 👍 ke pesan. INSTRUKSI: 1) Kirim pesan dulu, 2) Copy wa_message_id, 3) Set ke variable reactionTargetWaMessageId, 4) Run request ini",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"to\": \"{{testPhoneNumber}}\",\n  \"type\": \"reaction\",\n  \"reaction\": {\n    \"message_id\": \"{{reactionTargetWaMessageId}}\",\n    \"emoji\": \"👍\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/messages/send",
+							"host": ["{{baseUrl}}"],
+							"path": ["messages", "send"]
+						}
+					}
+				},
+				{
+					"name": "Send Heart Reaction",
+					"description": "Beri reaction ❤️ ke pesan. Update reactionTargetWaMessageId variable dulu!",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"to\": \"{{testPhoneNumber}}\",\n  \"type\": \"reaction\",\n  \"reaction\": {\n    \"message_id\": \"{{reactionTargetWaMessageId}}\",\n    \"emoji\": \"❤️\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/messages/send",
+							"host": ["{{baseUrl}}"],
+							"path": ["messages", "send"]
+						}
+					}
+				},
+				{
+					"name": "Send Laughing Reaction",
+					"description": "Beri reaction 😂 ke pesan",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"to\": \"{{testPhoneNumber}}\",\n  \"type\": \"reaction\",\n  \"reaction\": {\n    \"message_id\": \"{{reactionTargetWaMessageId}}\",\n    \"emoji\": \"😂\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/messages/send",
+							"host": ["{{baseUrl}}"],
+							"path": ["messages", "send"]
+						}
+					}
+				},
+				{
+					"name": "Remove Reaction",
+					"description": "Hapus reaction dengan emoji kosong",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"to\": \"{{testPhoneNumber}}\",\n  \"type\": \"reaction\",\n  \"reaction\": {\n    \"message_id\": \"{{reactionTargetWaMessageId}}\",\n    \"emoji\": \"\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/messages/send",
+							"host": ["{{baseUrl}}"],
+							"path": ["messages", "send"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "7. Outgoing Messages - MEDIA",
+			"item": [
+				{
+					"name": "Upload and Send Media File",
+					"description": "Upload dan kirim file media dalam satu request. INSTRUKSI: 1. Go to Body tab 2. Select 'form-data' 3. Add key 'media' (type: File) dan pilih file 4. Send request",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "media",
+									"type": "file",
+									"src": [],
+									"description": "Select image, video, audio, or document file"
+								},
+								{
+									"key": "to",
+									"value": "{{testPhoneNumber}}",
+									"type": "text"
+								},
+								{
+									"key": "caption",
+									"value": "Test media from Boztell Backend! 📸",
+									"type": "text",
+									"description": "Caption for image/video (optional)"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{baseUrl}}/messages/send-media-file",
+							"host": ["{{baseUrl}}"],
+							"path": ["messages", "send-media-file"]
+						}
+					}
+				},
+				{
+					"name": "Send Media by URL",
+					"description": "Kirim media menggunakan URL",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"to\": \"{{testPhoneNumber}}\",\n  \"mediaType\": \"image\",\n  \"mediaUrl\": \"https://picsum.photos/800/600.jpg\",\n  \"caption\": \"Random image from Picsum via URL 🌐\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/messages/send-media",
+							"host": ["{{baseUrl}}"],
+							"path": ["messages", "send-media"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "8. Complete Testing Workflow",
+			"description": "Jalankan requests ini secara berurutan untuk testing lengkap",
+			"item": [
+				{
+					"name": "Step 1: Send Initial Message",
+					"description": "🔹 STEP 1: Kirim pesan pertama dan SIMPAN wa_message_id dari response",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"to\": \"{{testPhoneNumber}}\",\n  \"text\": \"🚀 STEP 1: Initial message for testing workflow\\n\\nSetelah kirim ini:\\n1. Copy wa_message_id dari response\\n2. Set ke repliedWaMessageId dan reactionTargetWaMessageId variables\\n3. Lanjut ke Step 2\",\n  \"type\": \"text\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/messages/send",
+							"host": ["{{baseUrl}}"],
+							"path": ["messages", "send"]
+						}
+					}
+				},
+				{
+					"name": "Step 2: Send Reply",
+					"description": "🔹 STEP 2: Reply ke pesan Step 1 (update variable repliedWaMessageId dulu!)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"to\": \"{{testPhoneNumber}}\",\n  \"text\": \"📬 STEP 2: This is a reply to Step 1 message!\\n\\nReply berhasil jika muncul quote/reference ke pesan sebelumnya.\",\n  \"type\": \"text\",\n  \"context\": {\n    \"message_id\": \"{{repliedWaMessageId}}\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/messages/send",
+							"host": ["{{baseUrl}}"],
+							"path": ["messages", "send"]
+						}
+					}
+				},
+				{
+					"name": "Step 3: Send Reaction",
+					"description": "🔹 STEP 3: Beri reaction ke pesan Step 1 (update variable reactionTargetWaMessageId dulu!)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"to\": \"{{testPhoneNumber}}\",\n  \"type\": \"reaction\",\n  \"reaction\": {\n    \"message_id\": \"{{reactionTargetWaMessageId}}\",\n    \"emoji\": \"🎉\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/messages/send",
+							"host": ["{{baseUrl}}"],
+							"path": ["messages", "send"]
+						}
+					}
+				},
+				{
+					"name": "Step 4: Send Location",
+					"description": "🔹 STEP 4: Kirim lokasi sebagai penutup testing",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"to\": \"{{testPhoneNumber}}\",\n  \"type\": \"location\",\n  \"location\": {\n    \"latitude\": -6.2088,\n    \"longitude\": 106.8456,\n    \"name\": \"🏁 FINISH: Testing Workflow Complete!\",\n    \"address\": \"Boztell WhatsApp Backend API Testing - Location, Reply, Reaction berhasil!\"\n  }\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/messages/send",
+							"host": ["{{baseUrl}}"],
+							"path": ["messages", "send"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "9. Media Management",
+			"item": [
+				{
+					"name": "Upload Media File", 
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "file",
+									"type": "file",
+									"src": []
+								},
+								{
+									"key": "room_id",
+									"value": "{{testPhoneNumber}}",
+									"type": "text"
+								},
+								{
+									"key": "uploadToWhatsApp",
+									"value": "false",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{baseUrl}}/media/upload",
+							"host": ["{{baseUrl}}"],
+							"path": ["media", "upload"]
+						}
+					}
+				},
+				{
+					"name": "List Media Files",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/media/list?phone={{testPhoneNumber}}&date={{testDate}}&folder=media",
+							"host": ["{{baseUrl}}"],
+							"path": ["media", "list"],
+							"query": [
+								{ "key": "phone", "value": "{{testPhoneNumber}}" },
+								{ "key": "date", "value": "{{testDate}}" },
+								{ "key": "folder", "value": "media" }
+							]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "10. Device Management",
+			"item": [
+				{
+					"name": "Register Device Token",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"user_id\": \"test_user_{{$timestamp}}\",\n  \"device_token\": \"test_firebase_token_{{$timestamp}}\",\n  \"platform\": \"android\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/devices/register",
+							"host": ["{{baseUrl}}"],
+							"path": ["devices", "register"]
+						}
+					}
+				}
+			]
+		}
+	]
+}

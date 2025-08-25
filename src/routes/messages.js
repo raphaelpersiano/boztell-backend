@@ -57,6 +57,13 @@ router.post('/send', async (req, res) => {
     
     // Validate phone number
     const cleanPhone = validateWhatsAppPhoneNumber(to);
+    // Extract contextual reply if provided
+    const ctx = req.body.context;
+    let replyTo = options.replyTo || null;
+    if (ctx) {
+      if (typeof ctx === 'string') replyTo = ctx;
+      else if (typeof ctx === 'object' && ctx.message_id) replyTo = ctx.message_id;
+    }
     
     // Send message based on type
     let result;
@@ -80,17 +87,17 @@ router.post('/send', async (req, res) => {
           ) RETURNING *;
         `;
         const baseMeta = { direction: 'outgoing', source: 'api', type: 'text' };
-        if (options.replyTo) baseMeta.reply_to = options.replyTo;
+        if (replyTo) baseMeta.reply_to = replyTo;
         const insertParams = [
           messageId, cleanPhone, (user_id || 'operator'), (sender_name || 'Operator'), text,
-          options.replyTo || null,
+          replyTo || null,
           JSON.stringify(baseMeta)
         ];
         await query(insertSql, insertParams);
 
         // 2) Send to WhatsApp
         try {
-          result = await sendTextMessage(cleanPhone, text, options);
+          result = await sendTextMessage(cleanPhone, text, { ...options, replyTo });
         } catch (sendErr) {
           // Mark failure on the same row and return 500 with message_id for tracking
           const failMeta = { ...baseMeta, send_error: sendErr.message };
