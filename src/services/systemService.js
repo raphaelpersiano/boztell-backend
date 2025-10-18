@@ -1,5 +1,5 @@
 import { logger } from '../utils/logger.js';
-import { query } from '../db.js';
+import { insertSystemEvent, getSystemEvents as getSystemEventsDb } from '../db.js';
 
 /**
  * Handle WhatsApp system events (customer number changed, etc.)
@@ -25,13 +25,13 @@ export async function handleSystemEvent(eventData) {
     }
     
     // Log system event
-    await logSystemEvent({
+    await insertSystemEvent({
       room_id,
       sender_id,
       event_type: eventType,
       description,
-      event_data: system,
-      timestamp: new Date(timestamp)
+      event_data: system || {},
+      timestamp: new Date(timestamp).toISOString()
     });
     
     logger.info({ 
@@ -48,42 +48,13 @@ export async function handleSystemEvent(eventData) {
   }
 }
 
-/**
- * Log system event to database
- */
-async function logSystemEvent({ room_id, sender_id, event_type, description, event_data, timestamp }) {
-  const sql = `
-    INSERT INTO system_events (
-      room_id, sender_id, event_type, description, event_data, timestamp, created_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, NOW())
-    RETURNING *;
-  `;
-  
-  const params = [
-    room_id,
-    sender_id,
-    event_type,
-    description,
-    JSON.stringify(event_data || {}),
-    timestamp
-  ];
-  
-  const { rows } = await query(sql, params);
-  return rows[0];
-}
+
 
 /**
  * Get recent system events for a room
  */
 export async function getSystemEvents(roomId, limit = 50) {
-  const sql = `
-    SELECT * FROM system_events 
-    WHERE room_id = $1 
-    ORDER BY timestamp DESC 
-    LIMIT $2;
-  `;
-  
-  const { rows } = await query(sql, [roomId, limit]);
+  const { rows } = await getSystemEventsDb(roomId, limit);
   return rows.map(row => ({
     ...row,
     event_data: typeof row.event_data === 'string' 

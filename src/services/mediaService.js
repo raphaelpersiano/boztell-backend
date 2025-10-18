@@ -3,7 +3,7 @@ import FormData from 'form-data';
 import { v4 as uuidv4 } from 'uuid';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
-import { query } from '../db.js';
+import { insertMessage } from '../db.js';
 import { uploadBuffer, uploadStream } from './storageService.js';
 import { sendPushNotification, sendMulticastNotification } from './fcmService.js';
 
@@ -211,26 +211,29 @@ export async function uploadMediaToWhatsApp({ buffer, filename, mimeType }) {
  * Save media message to database
  */
 async function saveMediaMessage(data) {
-  const sql = `
-    INSERT INTO messages (
-      id, room_id, sender_id, sender, content_type, content_text,
-      media_type, media_id, gcs_filename, gcs_url, file_size, mime_type,
-      original_filename, wa_message_id, reply_to_wa_message_id, metadata, created_at
-    ) VALUES (
-      $1, $2, $3, $4, 'media', $5,
-      $6, $7, $8, $9, $10, $11,
-      $12, $13, $14, $15, NOW()
-    ) RETURNING *;
-  `;
-  
   const replyTo = data.reply_to_wa_message_id || data.metadata?.reply_to || null;
-  const params = [
-    data.id, data.room_id, data.sender_id, data.sender, data.caption,
-    data.media_type, data.media_id, data.gcs_filename, data.gcs_url, data.file_size,
-    data.mime_type, data.original_filename, data.wa_message_id, replyTo, JSON.stringify(data.metadata)
-  ];
   
-  const { rows } = await query(sql, params);
+  const messageData = {
+    id: data.id,
+    room_id: data.room_id,
+    sender_id: data.sender_id,
+    sender: data.sender,
+    content_type: 'media',
+    content_text: data.caption,
+    media_type: data.media_type,
+    media_id: data.media_id,
+    gcs_filename: data.gcs_filename,
+    gcs_url: data.gcs_url,
+    file_size: data.file_size,
+    mime_type: data.mime_type,
+    original_filename: data.original_filename,
+    wa_message_id: data.wa_message_id,
+    reply_to_wa_message_id: replyTo,
+    metadata: data.metadata || {},
+    created_at: new Date().toISOString()
+  };
+  
+  const { rows } = await insertMessage(messageData);
   return rows[0];
 }
 
@@ -265,14 +268,8 @@ async function generateThumbnailIfNeeded(gcsData, mediaType) {
 async function notifyRoomParticipants({ room_id, message }) {
   try {
     // Get participants with device tokens
-    const sql = `
-      SELECT rp.user_id, d.device_token
-      FROM room_participants rp
-      LEFT JOIN devices d ON d.user_id = rp.user_id
-      WHERE rp.room_id = $1 AND d.device_token IS NOT NULL;
-    `;
-    
-    const { rows: participants } = await query(sql, [room_id]);
+    const { getRoomParticipants } = await import('../db.js');
+    const { rows: participants } = await getRoomParticipants(room_id);
     
     if (participants.length === 0) {
       logger.debug({ room_id }, 'No participants with device tokens found');
@@ -289,7 +286,9 @@ async function notifyRoomParticipants({ room_id, message }) {
     
     // Remove invalid tokens
     if (result.invalidTokens && result.invalidTokens.length > 0) {
-      await removeInvalidTokens(result.invalidTokens);
+      const { deleteDeviceTokens } = await import('../db.js');
+      await deleteDeviceTokens(result.invalidTokens);
+      logger.info({ count: result.invalidTokens.length }, 'Invalid device tokens removed');
     }
     
     logger.info({ 
@@ -305,40 +304,14 @@ async function notifyRoomParticipants({ room_id, message }) {
   }
 }
 
-/**
- * Remove invalid device tokens from database
- */
-async function removeInvalidTokens(tokens) {
-  if (!tokens || tokens.length === 0) return;
-  
-  try {
-    const placeholders = tokens.map((_, i) => `$${i + 1}`).join(',');
-    const sql = `DELETE FROM devices WHERE device_token IN (${placeholders})`;
-    
-    await query(sql, tokens);
-    logger.info({ count: tokens.length }, 'Invalid device tokens removed');
-  } catch (err) {
-    logger.error({ err, tokenCount: tokens.length }, 'Failed to remove invalid tokens');
-  }
-}
+
 
 /**
  * Get media message by ID with GCS URL
  */
 export async function getMediaMessage(messageId) {
-  const sql = `
-    SELECT m.*, 
-           CASE 
-             WHEN m.gcs_filename IS NOT NULL 
-             THEN m.gcs_url 
-             ELSE NULL 
-           END as current_url
-    FROM messages m
-    WHERE m.id = $1 AND m.content_type = 'media';
-  `;
-  
-  const { rows } = await query(sql, [messageId]);
-  return rows[0] || null;
+  const { getMediaMessage: getMediaMessageDb } = await import('../db.js');
+  return await getMediaMessageDb(messageId);
 }
 
 /**
@@ -376,14 +349,8 @@ export async function refreshMediaUrl(messageId) {
     const newUrl = await generateSignedUrl(message.gcs_filename);
     
     // Update URL in database
-    const updateSql = `
-      UPDATE messages 
-      SET gcs_url = $1, updated_at = NOW()
-      WHERE id = $2
-      RETURNING *;
-    `;
-    
-    const { rows } = await query(updateSql, [newUrl, messageId]);
+    const { updateMediaUrl } = await import('../db.js');
+    const { rows } = await updateMediaUrl(messageId, newUrl);
     return rows[0];
     
   } catch (err) {

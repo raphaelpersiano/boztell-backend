@@ -1,8 +1,9 @@
 -- Enhanced schema for enterprise WhatsApp backend
 CREATE TABLE IF NOT EXISTS rooms (
-  id TEXT PRIMARY KEY,
-  external_id TEXT,
-  title TEXT,
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  leads_id TEXT,
+  phone TEXT NOT NULL,
+  title TEXT DEFAULT 'Personal',
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );

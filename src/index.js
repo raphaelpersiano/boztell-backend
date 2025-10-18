@@ -10,6 +10,10 @@ import { createWebhookRouter } from './routes/webhook.js';
 import { devicesRouter } from './routes/devices.js';
 import { mediaRouter } from './routes/media.js';
 import { messagesRouter } from './routes/messages.js';
+import leadsRouter from './routes/leads.js';
+import usersRouter from './routes/users.js';
+import authRouter from './routes/auth.js';
+import roomsRouter from './routes/rooms.js';
 import { initializeFirebase } from './services/fcmService.js';
 import { initializeStorage } from './services/storageService.js';
 
@@ -43,10 +47,12 @@ app.get('/health', async (req, res) => {
       const { query } = await import('./db.js');
       await query('SELECT 1');
       health.database = 'connected';
+      health.databaseType = 'supabase';
     } catch (dbErr) {
       health.database = 'disconnected';
+      health.databaseType = 'supabase';
       health.warnings = health.warnings || [];
-      health.warnings.push('Database connection failed');
+      health.warnings.push('Supabase database connection failed');
     }
     
     res.status(200).json(health);
@@ -74,11 +80,11 @@ async function initializeServices() {
   }
 
   try {
-    logger.info('Initializing Google Cloud Storage...');
+    logger.info('Initializing Supabase Storage...');
     initializeStorage();
-    logger.info('Google Cloud Storage initialized');
+    logger.info('Supabase Storage initialized');
   } catch (err) {
-    logger.warn({ err }, 'GCS initialization failed - media storage disabled');
+    logger.warn({ err }, 'Supabase Storage initialization failed - media storage disabled');
   }
 }
 
@@ -87,6 +93,10 @@ app.use('/webhook', createWebhookRouter(io));
 app.use('/devices', devicesRouter);
 app.use('/media', mediaRouter);
 app.use('/messages', messagesRouter);
+app.use('/leads', leadsRouter);
+app.use('/users', usersRouter);
+app.use('/api/auth', authRouter);
+app.use('/api', roomsRouter);
 
 // API info endpoint
 app.get('/api', (req, res) => {
@@ -96,10 +106,10 @@ app.get('/api', (req, res) => {
     features: [
       'WhatsApp Business Cloud API v23 webhooks',
       'Comprehensive message type support',
-      'Media upload/download with Google Cloud Storage',
+      'Media upload/download with Supabase Storage',
       'Firebase Admin SDK push notifications',
       'Real-time WebSocket updates',
-      'PostgreSQL message persistence',
+      'Supabase PostgreSQL message persistence', 
       'Enterprise-ready architecture'
     ],
     endpoints: {
@@ -107,6 +117,8 @@ app.get('/api', (req, res) => {
       devices: '/devices/register',
       media: '/media/upload',
       messages: '/messages/send',
+      rooms: '/api/rooms',
+      auth: '/api/auth/login',
       health: '/health'
     }
   });

@@ -1,6 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { query } from '../db.js';
-import { SQL } from '../models/sql/messages.sql.js';
+import { insertMessage, getRoomParticipants, deleteDeviceTokens } from '../db.js';
 import { logger } from '../utils/logger.js';
 import { ensureRoom } from './roomService.js';
 import { sendAutoReply, markMessageAsRead } from './whatsappService.js';
@@ -20,12 +19,7 @@ import { sendAutoReply, markMessageAsRead } from './whatsappService.js';
  */
 export async function handleIncomingMessage({ io }, input) {
   try {
-    // 1. Ensure room exists in database
-    await ensureRoom(input.room_id, {
-      customerPhone: input.sender_id,
-      customerName: input.sender,
-      lastActivity: new Date().toISOString()
-    });
+    // Note: input.room_id is already the actual room UUID from webhook handler
     
     // 2. Save message to database
     const id = uuidv4();
@@ -33,21 +27,22 @@ export async function handleIncomingMessage({ io }, input) {
     const reactionEmoji = input.metadata?.reaction?.emoji || null;
     const reactionToWa = input.metadata?.reaction?.message_id || null;
 
-    const params = [
+    const messageData = {
       id,
-      input.room_id,
-      input.sender_id,
-      input.sender,
-      input.content_type,
-      input.content_text,
-      input.wa_message_id || null,
-  replyTo,
-      reactionEmoji,
-      reactionToWa,
-      JSON.stringify(input.metadata || {})
-    ];
+      room_id: input.room_id,
+      sender_id: input.sender_id,
+      sender: input.sender,
+      content_type: input.content_type,
+      content_text: input.content_text,
+      wa_message_id: input.wa_message_id || null,
+      reply_to_wa_message_id: replyTo,
+      reaction_emoji: reactionEmoji,
+      reaction_to_wa_message_id: reactionToWa,
+      metadata: input.metadata || {},
+      created_at: new Date().toISOString()
+    };
 
-    const { rows } = await query(SQL.insertMessage, params);
+    const { rows } = await insertMessage(messageData);
     const message = rows[0];
 
     logger.info({ 
@@ -123,7 +118,7 @@ export async function handleIncomingMessage({ io }, input) {
 async function sendPushNotifications(roomId, notificationData) {
   try {
     // Fetch participants to notify
-    const { rows: participants } = await query(SQL.getRoomParticipants, [roomId]);
+    const { rows: participants } = await getRoomParticipants(roomId);
 
     if (participants.length === 0) {
       logger.debug({ roomId }, 'No participants found for push notifications');
@@ -147,7 +142,8 @@ async function sendPushNotifications(roomId, notificationData) {
 
     // Remove invalid tokens if any
     if (result.invalidTokens && result.invalidTokens.length > 0) {
-      await removeInvalidTokens(result.invalidTokens);
+      await deleteDeviceTokens(result.invalidTokens);
+      logger.info({ count: result.invalidTokens.length }, 'Invalid device tokens removed');
     }
 
     logger.info({ 
@@ -161,19 +157,4 @@ async function sendPushNotifications(roomId, notificationData) {
   }
 }
 
-/**
- * Remove invalid device tokens from database
- */
-async function removeInvalidTokens(tokens) {
-  if (!tokens || tokens.length === 0) return;
-  
-  try {
-    const placeholders = tokens.map((_, i) => `$${i + 1}`).join(',');
-    const sql = `DELETE FROM devices WHERE device_token IN (${placeholders})`;
-    
-    await query(sql, tokens);
-    logger.info({ count: tokens.length }, 'Invalid device tokens removed');
-  } catch (err) {
-    logger.error({ err, tokenCount: tokens.length }, 'Failed to remove invalid tokens');
-  }
-}
+

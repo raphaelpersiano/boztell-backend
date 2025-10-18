@@ -5,7 +5,8 @@ import { sendTextMessage, sendMediaMessage, sendMediaByUrl, sendTemplateMessage,
 import { validateWhatsAppPhoneNumber } from '../services/whatsappService.js';
 import { uploadBuffer as uploadToGCS } from '../services/storageService.js';
 import { ensureRoom } from '../services/roomService.js';
-import { query } from '../db.js';
+import { insertMessage, updateMessage } from '../db.js';
+import { getUserForMessage } from '../services/userService.js';
 import { logger } from '../utils/logger.js';
 
 const router = express.Router();
@@ -42,12 +43,47 @@ const upload = multer({
 });
 
 /**
+ * Helper function to get sender name from user_id
+ */
+async function getSenderInfo(user_id, fallback_sender_name = 'Operator') {
+  try {
+    if (!user_id || user_id === 'operator') {
+      return { user_id: 'operator', sender_name: fallback_sender_name };
+    }
+    
+    const user = await getUserForMessage(user_id);
+    if (user && user.name) {
+      return { user_id, sender_name: user.name };
+    }
+    
+    // Fallback if user not found
+    logger.warn(`User not found for user_id: ${user_id}, using fallback`);
+    return { user_id, sender_name: fallback_sender_name };
+    
+  } catch (error) {
+    logger.error('Error getting sender info:', error);
+    return { user_id, sender_name: fallback_sender_name };
+  }
+}
+
+/**
+ * Helper function to ensure room and get room ID
+ */
+async function ensureRoomAndGetId(phone, metadata = {}) {
+  const room = await ensureRoom(phone, { phone, ...metadata });
+  return room.id;
+}
+
+/**
  * Send text message to WhatsApp
  * POST /messages/send
  */
 router.post('/send', async (req, res) => {
   try {
-    const { to, text, type = 'text', user_id = 'operator', sender_name = 'Operator', ...options } = req.body;
+    const { to, text, type = 'text', user_id = 'operator', sender_name: fallback_sender_name = 'Operator', ...options } = req.body;
+    
+    // Get sender info from user table
+    const { user_id: finalUserId, sender_name } = await getSenderInfo(user_id, fallback_sender_name);
     
     if (!to || !text) {
       return res.status(400).json({ 
@@ -71,29 +107,34 @@ router.post('/send', async (req, res) => {
     switch (type) {
       case 'text':
         // Ensure room exists (1 room = 1 phone number)
-        await ensureRoom(cleanPhone, { customerPhone: cleanPhone });
+        const textRoom = await ensureRoom(cleanPhone, { phone: cleanPhone });
 
         // 1) Insert DB row first
         const messageId = uuidv4();
-        const insertSql = `
-          INSERT INTO messages (
-            id, room_id, sender_id, sender, content_type, content_text,
-            media_type, media_id, gcs_filename, gcs_url, file_size, mime_type,
-            original_filename, wa_message_id, reply_to_wa_message_id, metadata, created_at
-          ) VALUES (
-            $1, $2, $3, $4, 'text', $5,
-            NULL, NULL, NULL, NULL, NULL, NULL,
-            NULL, NULL, $6, $7, NOW()
-          ) RETURNING *;
-        `;
         const baseMeta = { direction: 'outgoing', source: 'api', type: 'text' };
         if (replyTo) baseMeta.reply_to = replyTo;
-        const insertParams = [
-          messageId, cleanPhone, (user_id || 'operator'), (sender_name || 'Operator'), text,
-          replyTo || null,
-          JSON.stringify(baseMeta)
-        ];
-        await query(insertSql, insertParams);
+        
+        const messageData = {
+          id: messageId,
+          room_id: textRoom.id,
+          sender_id: finalUserId,
+          sender: sender_name,
+          content_type: 'text',
+          content_text: text,
+          media_type: null,
+          media_id: null,
+          gcs_filename: null,
+          gcs_url: null,
+          file_size: null,
+          mime_type: null,
+          original_filename: null,
+          wa_message_id: null,
+          reply_to_wa_message_id: replyTo || null,
+          metadata: baseMeta,
+          created_at: new Date().toISOString()
+        };
+        
+        await insertMessage(messageData);
 
         // 2) Send to WhatsApp
         try {
@@ -102,9 +143,7 @@ router.post('/send', async (req, res) => {
           // Mark failure on the same row and return 500 with message_id for tracking
           const failMeta = { ...baseMeta, send_error: sendErr.message };
           try {
-            await query('UPDATE messages SET metadata = $1, updated_at = NOW() WHERE id = $2', [
-              JSON.stringify(failMeta), messageId
-            ]);
+            await updateMessage(messageId, { metadata: failMeta });
           } catch (_) { /* best effort */ }
           throw Object.assign(new Error(sendErr.message), { _messageId: messageId });
         }
@@ -112,9 +151,7 @@ router.post('/send', async (req, res) => {
         // 3) Update DB row with WA message id
         const waMessageId = result.messages?.[0]?.id || null;
         try {
-          await query('UPDATE messages SET wa_message_id = $1, updated_at = NOW() WHERE id = $2', [
-            waMessageId, messageId
-          ]);
+          await updateMessage(messageId, { wa_message_id: waMessageId });
         } catch (updErr) {
           logger.warn({ err: updErr, messageId }, 'Failed to update wa_message_id for text message');
         }
@@ -136,7 +173,48 @@ router.post('/send', async (req, res) => {
         if (!templateName) {
           return res.status(400).json({ error: 'templateName required for template messages' });
         }
-        result = await sendTemplateMessage(cleanPhone, templateName, languageCode, parameters);
+        
+        // Ensure room exists
+        const templateRoomId = await ensureRoomAndGetId(cleanPhone);
+
+        // Insert DB row first
+        const templateMessageId = uuidv4();
+        const templateMeta = { direction: 'outgoing', source: 'api', type: 'template', templateName, languageCode };
+        
+        const templateMessageData = {
+          id: templateMessageId,
+          room_id: templateRoomId,
+          sender_id: finalUserId,
+          sender: sender_name,
+          content_type: 'template',
+          content_text: `Template: ${templateName}`,
+          wa_message_id: null,
+          metadata: templateMeta,
+          created_at: new Date().toISOString()
+        };
+        
+        await insertMessage(templateMessageData);
+
+        try {
+          result = await sendTemplateMessage(cleanPhone, templateName, languageCode, parameters);
+        } catch (sendErr) {
+          const failMeta = { ...templateMeta, send_error: sendErr.message };
+          await updateMessage(templateMessageId, { metadata: failMeta });
+          throw Object.assign(new Error(sendErr.message), { _messageId: templateMessageId });
+        }
+
+        const templateWaMessageId = result.messages?.[0]?.id || null;
+        await updateMessage(templateMessageId, { wa_message_id: templateWaMessageId });
+
+        return res.json({
+          success: true,
+          to: cleanPhone,
+          type: 'template',
+          templateName,
+          message_id: templateMessageId,
+          whatsapp_message_id: templateWaMessageId,
+          result
+        });
         break;
         
       default:
@@ -170,33 +248,52 @@ router.post('/send', async (req, res) => {
  */
 router.post('/send-contacts', async (req, res) => {
   try {
-    const { to, contacts, replyTo, user_id = 'operator', sender_name = 'Operator' } = req.body;
+    const { to, contacts, replyTo, user_id = 'operator', sender_name: fallback_sender_name = 'Operator' } = req.body;
+    
+    // Get sender info from user table
+    const { user_id: finalUserId, sender_name } = await getSenderInfo(user_id, fallback_sender_name);
     if (!to || !Array.isArray(contacts) || contacts.length === 0) {
       return res.status(400).json({ error: 'to and contacts[] required' });
     }
     const cleanPhone = validateWhatsAppPhoneNumber(to);
-    await ensureRoom(cleanPhone, { customerPhone: cleanPhone });
+    const contactsRoomId = await ensureRoomAndGetId(cleanPhone);
 
     // Insert DB row first
     const messageId = uuidv4();
     const meta = { direction: 'outgoing', source: 'api', type: 'contacts' };
     if (replyTo) meta.reply_to = replyTo;
-    await query(`
-      INSERT INTO messages (id, room_id, sender_id, sender, content_type, content_text,
-        media_type, media_id, gcs_filename, gcs_url, file_size, mime_type,
-        original_filename, wa_message_id, reply_to_wa_message_id, metadata, created_at)
-      VALUES ($1,$2,$3,$4,'contacts',$5,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,$6,$7,NOW())
-    `, [messageId, cleanPhone, user_id, sender_name, `contacts:${contacts.length}`, replyTo || null, JSON.stringify(meta)]);
+    
+    const messageData = {
+      id: messageId,
+      room_id: contactsRoomId,
+      sender_id: finalUserId,
+      sender: sender_name,
+      content_type: 'contacts',
+      content_text: `contacts:${contacts.length}`,
+      media_type: null,
+      media_id: null,
+      gcs_filename: null,
+      gcs_url: null,
+      file_size: null,
+      mime_type: null,
+      original_filename: null,
+      wa_message_id: null,
+      reply_to_wa_message_id: replyTo || null,
+      metadata: meta,
+      created_at: new Date().toISOString()
+    };
+    
+    await insertMessage(messageData);
 
     let result;
     try {
       result = await sendContactsMessage(cleanPhone, contacts, { replyTo });
     } catch (err) {
-      await query('UPDATE messages SET metadata = $1, updated_at = NOW() WHERE id = $2', [JSON.stringify({ ...meta, send_error: err.message }), messageId]);
+      await updateMessage(messageId, { metadata: { ...meta, send_error: err.message } });
       throw Object.assign(new Error(err.message), { _messageId: messageId });
     }
     const waMessageId = result.messages?.[0]?.id || null;
-    await query('UPDATE messages SET wa_message_id = $1, updated_at = NOW() WHERE id = $2', [waMessageId, messageId]);
+    await updateMessage(messageId, { wa_message_id: waMessageId });
     res.json({ success: true, to: cleanPhone, type: 'contacts', message_id: messageId, whatsapp_message_id: waMessageId, result });
   } catch (err) {
     if (err._messageId) return res.status(500).json({ error: 'Failed to send contacts', message: err.message, message_id: err._messageId });
@@ -211,32 +308,51 @@ router.post('/send-contacts', async (req, res) => {
  */
 router.post('/send-location', async (req, res) => {
   try {
-    const { to, location, replyTo, user_id = 'operator', sender_name = 'Operator' } = req.body;
+    const { to, location, replyTo, user_id = 'operator', sender_name: fallback_sender_name = 'Operator' } = req.body;
+    
+    // Get sender info from user table
+    const { user_id: finalUserId, sender_name } = await getSenderInfo(user_id, fallback_sender_name);
     if (!to || !location || typeof location.latitude !== 'number' || typeof location.longitude !== 'number') {
       return res.status(400).json({ error: 'to and location.latitude/longitude required' });
     }
     const cleanPhone = validateWhatsAppPhoneNumber(to);
-    await ensureRoom(cleanPhone, { customerPhone: cleanPhone });
+    const locationRoomId = await ensureRoomAndGetId(cleanPhone);
 
     const messageId = uuidv4();
     const meta = { direction: 'outgoing', source: 'api', type: 'location', location };
     if (replyTo) meta.reply_to = replyTo;
-    await query(`
-      INSERT INTO messages (id, room_id, sender_id, sender, content_type, content_text,
-        media_type, media_id, gcs_filename, gcs_url, file_size, mime_type,
-        original_filename, wa_message_id, reply_to_wa_message_id, metadata, created_at)
-      VALUES ($1,$2,$3,$4,'location',$5,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,$6,$7,NOW())
-    `, [messageId, cleanPhone, user_id, sender_name, `Location: ${location.latitude}, ${location.longitude}`, replyTo || null, JSON.stringify(meta)]);
+    
+    const messageData = {
+      id: messageId,
+      room_id: locationRoomId,
+      sender_id: finalUserId,
+      sender: sender_name,
+      content_type: 'location',
+      content_text: `Location: ${location.latitude}, ${location.longitude}`,
+      media_type: null,
+      media_id: null,
+      gcs_filename: null,
+      gcs_url: null,
+      file_size: null,
+      mime_type: null,
+      original_filename: null,
+      wa_message_id: null,
+      reply_to_wa_message_id: replyTo || null,
+      metadata: meta,
+      created_at: new Date().toISOString()
+    };
+    
+    await insertMessage(messageData);
 
     let result;
     try {
       result = await sendLocationMessage(cleanPhone, location, { replyTo });
     } catch (err) {
-      await query('UPDATE messages SET metadata = $1, updated_at = NOW() WHERE id = $2', [JSON.stringify({ ...meta, send_error: err.message }), messageId]);
+      await updateMessage(messageId, { metadata: { ...meta, send_error: err.message } });
       throw Object.assign(new Error(err.message), { _messageId: messageId });
     }
     const waMessageId = result.messages?.[0]?.id || null;
-    await query('UPDATE messages SET wa_message_id = $1, updated_at = NOW() WHERE id = $2', [waMessageId, messageId]);
+    await updateMessage(messageId, { wa_message_id: waMessageId });
     res.json({ success: true, to: cleanPhone, type: 'location', message_id: messageId, whatsapp_message_id: waMessageId, result });
   } catch (err) {
     if (err._messageId) return res.status(500).json({ error: 'Failed to send location', message: err.message, message_id: err._messageId });
@@ -256,26 +372,43 @@ router.post('/send-reaction', async (req, res) => {
       return res.status(400).json({ error: 'to, message_id, and emoji are required' });
     }
     const cleanPhone = validateWhatsAppPhoneNumber(to);
-    await ensureRoom(cleanPhone, { customerPhone: cleanPhone });
+    const reactionRoomId = await ensureRoomAndGetId(cleanPhone);
 
     const messageId = uuidv4();
     const meta = { direction: 'outgoing', source: 'api', type: 'reaction', reaction: { emoji, message_id } };
-    await query(`
-      INSERT INTO messages (id, room_id, sender_id, sender, content_type, content_text,
-        media_type, media_id, gcs_filename, gcs_url, file_size, mime_type,
-        original_filename, wa_message_id, reaction_emoji, reaction_to_wa_message_id, metadata, created_at)
-      VALUES ($1,$2,$3,$4,'reaction',$5,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,$6,$7,$8,NOW())
-    `, [messageId, cleanPhone, user_id, sender_name, `Reaction ${emoji} to ${message_id}`, emoji, message_id, JSON.stringify(meta)]);
+    
+    const messageData = {
+      id: messageId,
+      room_id: reactionRoomId,
+      sender_id: user_id,
+      sender: sender_name,
+      content_type: 'reaction',
+      content_text: `Reaction ${emoji} to ${message_id}`,
+      media_type: null,
+      media_id: null,
+      gcs_filename: null,
+      gcs_url: null,
+      file_size: null,
+      mime_type: null,
+      original_filename: null,
+      wa_message_id: null,
+      reaction_emoji: emoji,
+      reaction_to_wa_message_id: message_id,
+      metadata: meta,
+      created_at: new Date().toISOString()
+    };
+    
+    await insertMessage(messageData);
 
     let result;
     try {
       result = await sendReactionMessage(cleanPhone, message_id, emoji);
     } catch (err) {
-      await query('UPDATE messages SET metadata = $1, updated_at = NOW() WHERE id = $2', [JSON.stringify({ ...meta, send_error: err.message }), messageId]);
+      await updateMessage(messageId, { metadata: { ...meta, send_error: err.message } });
       throw err;
     }
     const waMessageId = result.messages?.[0]?.id || null;
-    await query('UPDATE messages SET wa_message_id = $1, updated_at = NOW() WHERE id = $2', [waMessageId, messageId]);
+    await updateMessage(messageId, { wa_message_id: waMessageId });
     res.json({ success: true, to: cleanPhone, type: 'reaction', message_id: messageId, whatsapp_message_id: waMessageId, result });
   } catch (err) {
     res.status(500).json({ error: 'Failed to send reaction', message: err.message });
@@ -349,6 +482,12 @@ router.post('/send-media', async (req, res) => {
 /**
  * Upload and send media to WhatsApp in one request
  * POST /messages/send-media-file
+ * 
+ * Caption Support by Media Type:
+ * - Image: ✅ Caption supported natively by WhatsApp
+ * - Video: ✅ Caption supported natively by WhatsApp  
+ * - Audio: ❌ Caption not supported (ignored by WhatsApp)
+ * - Document: ❌ Caption not supported, sent as separate text message
  */
 router.post('/send-media-file', upload.single('media'), async (req, res) => {
   try {
@@ -390,12 +529,76 @@ router.post('/send-media-file', upload.single('media'), async (req, res) => {
       filename: originalname
     });
     
+    // 3. For documents with caption, send separate text message (WhatsApp limitation workaround)
+    let textMessageResult = null;
+    let textMessageDbId = null;
+    if (mediaType === 'document' && caption && caption.trim()) {
+      try {
+        logger.info({ 
+          mediaType, 
+          caption: caption.trim(),
+          to: cleanPhone 
+        }, 'Sending separate text message for document caption (WhatsApp API limitation)');
+        
+        // Ensure room exists for text message
+        const textRoomId = await ensureRoomAndGetId(cleanPhone);
+        
+        textMessageResult = await sendTextMessage(cleanPhone, caption.trim());
+        
+        // Save text message to database
+        textMessageDbId = uuidv4();
+        const textMessageData = {
+          id: textMessageDbId,
+          room_id: textRoomId,
+          sender_id: 'operator',
+          sender: 'Operator',
+          content_type: 'text',
+          content_text: caption.trim(),
+          media_type: null,
+          media_id: null,
+          gcs_filename: null,
+          gcs_url: null,
+          file_size: null,
+          mime_type: null,
+          original_filename: null,
+          wa_message_id: textMessageResult.messages?.[0]?.id || null,
+          reply_to_wa_message_id: null,
+          reaction_emoji: null,
+          reaction_to_wa_message_id: null,
+          metadata: { 
+            direction: 'outgoing', 
+            source: 'api', 
+            type: 'text',
+            related_to: 'document_caption',
+            parent_media_message_id: sendResult.messages?.[0]?.id || null,
+            original_media_filename: originalname
+          },
+          created_at: new Date().toISOString()
+        };
+        
+        await insertMessage(textMessageData);
+        
+        logger.info({ 
+          textMessageId: textMessageResult.messages?.[0]?.id,
+          textMessageDbId,
+          originalCaption: caption.trim(),
+          parentMediaMessageId: sendResult.messages?.[0]?.id
+        }, 'Document caption sent as separate text message and saved to database');
+      } catch (textErr) {
+        logger.warn({ 
+          err: textErr, 
+          caption: caption.trim() 
+        }, 'Failed to send document caption as text message');
+      }
+    }
+    
     logger.info({ 
       to: cleanPhone,
       mediaType,
       filename: originalname,
       mediaId: uploadResult.id,
-      messageId: sendResult.messages?.[0]?.id 
+      messageId: sendResult.messages?.[0]?.id,
+      textMessageId: textMessageResult?.messages?.[0]?.id || null
     }, 'Media uploaded and sent to WhatsApp successfully');
     
     res.json({
@@ -407,7 +610,15 @@ router.post('/send-media-file', upload.single('media'), async (req, res) => {
       whatsapp_media_id: uploadResult.id,
       whatsapp_message_id: sendResult.messages?.[0]?.id,
       upload: uploadResult,
-      send: sendResult
+      send: sendResult,
+      caption_handling: {
+        caption_provided: !!caption,
+        caption_supported_by_media_type: ['image', 'video'].includes(mediaType),
+        separate_text_message_sent: mediaType === 'document' && !!caption && !!textMessageResult,
+        separate_text_message_id: textMessageResult?.messages?.[0]?.id || null,
+        separate_text_message_db_id: textMessageDbId,
+        note: mediaType === 'document' && caption ? 'Document captions not supported by WhatsApp API. Caption sent as separate text message and saved to database.' : null
+      }
     });
     
   } catch (err) {
@@ -425,13 +636,22 @@ router.post('/send-media-file', upload.single('media'), async (req, res) => {
 });
 
 /**
- * Combined flow: upload to GCS + persist DB + upload to WhatsApp + send to WhatsApp
+ * Combined flow: upload to Supabase Storage + persist DB + upload to WhatsApp + send to WhatsApp
  * POST /messages/send-media-combined
  * Form fields: media (file), to (phone), caption (optional), user_id (optional), sender_name (optional)
+ * 
+ * Caption Support by Media Type:
+ * - Image: ✅ Caption supported natively by WhatsApp
+ * - Video: ✅ Caption supported natively by WhatsApp  
+ * - Audio: ❌ Caption not supported (ignored by WhatsApp)
+ * - Document: ❌ Caption not supported, sent as separate text message automatically
  */
 router.post('/send-media-combined', upload.single('media'), async (req, res) => {
   try {
-    const { to, caption = '', user_id = null, sender_name = 'Operator' } = req.body;
+    const { to, caption = '', user_id = null, sender_name: fallback_sender_name = 'Operator' } = req.body;
+    
+    // Get sender info from user table
+    const { user_id: finalUserId, sender_name } = await getSenderInfo(user_id, fallback_sender_name);
 
     if (!to) {
       return res.status(400).json({ error: 'Phone number (to) required' });
@@ -451,84 +671,224 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
     else mediaType = 'document';
 
     // Ensure room exists (1 room = 1 phone number)
-    await ensureRoom(cleanPhone, { customerPhone: cleanPhone });
+    const mediaRoomId = await ensureRoomAndGetId(cleanPhone);
+    
+    logger.info({ 
+      to: cleanPhone, 
+      filename: originalname, 
+      size: buffer.length, 
+      mimetype 
+    }, 'Starting combined media flow');
 
-    // 1) Upload to GCS (organized by phone/date)
-  const gcs = await uploadToGCS({
-      buffer,
-      filename: originalname,
-      contentType: mimetype,
-      folder: 'whatsapp-media',
-      roomId: cleanPhone,
-      phoneNumber: cleanPhone
-    });
+    let supabaseStorage, messageId, waUpload, sendResult;
 
-    // 2) Create DB row first (will update with WA IDs later)
-    const messageId = uuidv4();
-  const insertSql = `
-      INSERT INTO messages (
-        id, room_id, sender_id, sender, content_type, content_text,
-        media_type, media_id, gcs_filename, gcs_url, file_size, mime_type,
-        original_filename, wa_message_id, metadata, created_at
-      ) VALUES (
-        $1, $2, $3, $4, 'media', $5,
-        $6, NULL, $7, $8, $9, $10,
-        $11, NULL, $12, NOW()
-      ) RETURNING *;
-    `;
-    const metadata = { direction: 'outgoing', source: 'api', filename: originalname };
-    const storedName = (gcs.gcsFilename || '').split('/').pop() || originalname;
-    const insertParams = [
-      messageId, cleanPhone, (user_id || 'operator'), (sender_name || 'Operator'), caption,
-      mediaType, gcs.gcsFilename, gcs.url, gcs.size, mimetype,
-      storedName, JSON.stringify(metadata)
-    ];
-    const { rows: insertedRows } = await query(insertSql, insertParams);
+    try {
+      // 1) Upload to Supabase Storage (organized by phone/date)
+      supabaseStorage = await uploadToGCS({
+        buffer,
+        filename: originalname,
+        contentType: mimetype,
+        folder: 'whatsapp-media',
+        roomId: cleanPhone,
+        phoneNumber: cleanPhone
+      });
+      
+      logger.info({ 
+        filename: supabaseStorage.gcsFilename,
+        url: supabaseStorage.url,
+        size: supabaseStorage.size 
+      }, 'Media uploaded to Supabase Storage successfully');
 
-    // 3) Upload media to WhatsApp to obtain media ID
-    const waUpload = await uploadMediaToWhatsApp({
-      buffer,
-      filename: originalname,
-      mimeType: mimetype
-    });
+    } catch (storageErr) {
+      logger.error({ err: storageErr, filename: originalname }, 'Failed to upload to Supabase Storage');
+      throw new Error(`Storage upload failed: ${storageErr.message}`);
+    }
 
-    // 4) Send WhatsApp message using media ID
-    const sendResult = await sendMediaMessage(cleanPhone, mediaType, waUpload.id, {
-      caption,
-      filename: originalname
-    });
-    const waMessageId = sendResult.messages?.[0]?.id || null;
+    try {
+      // 2) Upload media to WhatsApp to obtain media ID first
+      waUpload = await uploadMediaToWhatsApp({
+        buffer,
+        filename: originalname,
+        mimeType: mimetype
+      });
+      
+      logger.info({ mediaId: waUpload.id, filename: originalname }, 'Media uploaded to WhatsApp successfully');
 
-    // 5) Update the same DB row with WhatsApp IDs
-    const updateSql = `
-      UPDATE messages
-      SET media_id = $1, wa_message_id = $2, updated_at = NOW()
-      WHERE id = $3
-      RETURNING *;
-    `;
-    const { rows: updatedRows } = await query(updateSql, [waUpload.id, waMessageId, messageId]);
-    const saved = updatedRows[0] || insertedRows[0];
+      // 3) Send WhatsApp message using media ID
+      sendResult = await sendMediaMessage(cleanPhone, mediaType, waUpload.id, {
+        caption: caption || '',
+        filename: originalname
+      });
+      const waMessageId = sendResult.messages?.[0]?.id || null;
+      
+      // 4) For documents with caption, send separate text message (WhatsApp limitation workaround)
+      let textMessageResult = null;
+      let textMessageDbId = null;
+      if (mediaType === 'document' && caption && caption.trim()) {
+        try {
+          logger.info({ 
+            mediaType, 
+            caption: caption.trim(),
+            to: cleanPhone 
+          }, 'Sending separate text message for document caption (WhatsApp API limitation)');
+          
+          textMessageResult = await sendTextMessage(cleanPhone, caption.trim());
+          
+          // Save text message to database
+          textMessageDbId = uuidv4();
+          const textMessageData = {
+            id: textMessageDbId,
+            room_id: cleanPhone,
+            sender_id: finalUserId,
+            sender: sender_name,
+            content_type: 'text',
+            content_text: caption.trim(),
+            media_type: null,
+            media_id: null,
+            gcs_filename: null,
+            gcs_url: null,
+            file_size: null,
+            mime_type: null,
+            original_filename: null,
+            wa_message_id: textMessageResult.messages?.[0]?.id || null,
+            reply_to_wa_message_id: null,
+            reaction_emoji: null,
+            reaction_to_wa_message_id: null,
+            metadata: { 
+              direction: 'outgoing', 
+              source: 'api', 
+              type: 'text',
+              related_to: 'document_caption',
+              parent_media_message_id: waMessageId,
+              original_media_filename: originalname
+            },
+            created_at: new Date().toISOString()
+          };
+          
+          await insertMessage(textMessageData);
+          
+          logger.info({ 
+            textMessageId: textMessageResult.messages?.[0]?.id,
+            textMessageDbId,
+            originalCaption: caption.trim(),
+            parentMediaMessageId: waMessageId
+          }, 'Document caption sent as separate text message and saved to database');
+        } catch (textErr) {
+          logger.warn({ 
+            err: textErr, 
+            caption: caption.trim() 
+          }, 'Failed to send document caption as text message');
+        }
+      }
+      
+      logger.info({ 
+        waMessageId, 
+        mediaId: waUpload.id,
+        to: cleanPhone,
+        textMessageId: textMessageResult?.messages?.[0]?.id || null
+      }, 'WhatsApp message sent successfully');
 
-    logger.info({
-      to: cleanPhone,
-      mediaType,
-      mediaId: waUpload.id,
-      waMessageId,
-      gcsFilename: gcs.gcsFilename
-    }, 'Combined media flow successful');
+      // 6) Create DB row with ALL data at once (optimized - single query)
+      messageId = uuidv4();
+      const metadata = { 
+        direction: 'outgoing', 
+        source: 'api', 
+        filename: originalname,
+        upload_step: 'complete',
+        whatsapp_media_id: waUpload.id,
+        whatsapp_message_id: waMessageId,
+        media_caption_limitation: mediaType === 'document' && caption ? 'caption_sent_as_separate_text' : null,
+        separate_text_message_id: textMessageResult?.messages?.[0]?.id || null,
+        separate_text_message_db_id: textMessageDbId
+      };
+      const storedName = (supabaseStorage.gcsFilename || '').split('/').pop() || originalname;
+      
+      const messageData = {
+        id: messageId,
+        room_id: mediaRoomId,
+        sender_id: finalUserId,
+        sender: sender_name,
+        content_type: 'media',
+        content_text: caption || '',
+        media_type: mediaType,
+        media_id: waUpload.id, // Already have media ID
+        gcs_filename: supabaseStorage.gcsFilename,
+        gcs_url: supabaseStorage.url,
+        file_size: supabaseStorage.size,
+        mime_type: mimetype,
+        original_filename: storedName,
+        wa_message_id: waMessageId, // Already have message ID
+        reply_to_wa_message_id: null,
+        reaction_emoji: null,
+        reaction_to_wa_message_id: null,
+        metadata: metadata,
+        created_at: new Date().toISOString()
+      };
+      
+      await insertMessage(messageData);
+      
+      logger.info({ 
+        messageId, 
+        room_id: cleanPhone, 
+        mediaId: waUpload.id,
+        waMessageId 
+      }, 'Message record created in database with complete data');
 
-    return res.json({
-      success: true,
-      to: cleanPhone,
-      mediaType,
-      message_id: saved.id,
-      whatsapp_media_id: waUpload.id,
-      whatsapp_message_id: waMessageId,
-      public_url: gcs.url
-    });
+      logger.info({
+        to: cleanPhone,
+        mediaType,
+        mediaId: waUpload.id,
+        waMessageId,
+        gcsFilename: supabaseStorage.gcsFilename,
+        messageId
+      }, 'Combined media flow completed successfully');
+
+      return res.json({
+        success: true,
+        to: cleanPhone,
+        mediaType,
+        filename: originalname,
+        size: buffer.length,
+        message_id: messageId,
+        whatsapp_media_id: waUpload.id,
+        whatsapp_message_id: waMessageId,
+        storage_url: supabaseStorage.url,
+        storage_filename: supabaseStorage.gcsFilename,
+        caption_handling: {
+          caption_provided: !!caption,
+          caption_supported_by_media_type: ['image', 'video'].includes(mediaType),
+          separate_text_message_sent: mediaType === 'document' && !!caption && !!textMessageResult,
+          separate_text_message_id: textMessageResult?.messages?.[0]?.id || null,
+          separate_text_message_db_id: textMessageDbId,
+          note: mediaType === 'document' && caption ? 'Document captions not supported by WhatsApp API. Caption sent as separate text message and saved to database.' : null
+        }
+      });
+
+    } catch (waErr) {
+      logger.error({ err: waErr, filename: originalname }, 'Failed in WhatsApp operations or database insert');
+      throw new Error(`WhatsApp/Database operation failed: ${waErr.message}`);
+    }
+
   } catch (err) {
-    logger.error({ err }, 'Failed combined media flow');
-    return res.status(500).json({ error: 'Failed to upload and send media', message: err.message });
+    logger.error({ 
+      err, 
+      to: req.body.to,
+      filename: req.file?.originalname,
+      step: 'combined_media_flow'
+    }, 'Combined media flow failed');
+    
+    return res.status(500).json({ 
+      error: 'Failed to upload and send media', 
+      message: err.message,
+      details: {
+        step_completed: {
+          storage_upload: !!supabaseStorage,
+          database_insert: !!messageId,
+          whatsapp_upload: !!waUpload,
+          whatsapp_send: !!sendResult
+        }
+      }
+    });
   }
 });
 
@@ -598,6 +958,518 @@ router.get('/:messageId/status', async (req, res) => {
   } catch (err) {
     logger.error({ err, messageId: req.params.messageId }, 'Failed to get message status');
     res.status(500).json({ error: 'Failed to get message status' });
+  }
+});
+
+/**
+ * Debug message delivery status
+ * GET /messages/debug/:waMessageId
+ */
+router.get('/debug/:waMessageId', async (req, res) => {
+  try {
+    const { waMessageId } = req.params;
+    
+    // Check message in database
+    const { getMessage } = await import('../db.js');
+    const result = await getMessage(waMessageId);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ 
+        error: 'Message not found in database',
+        suggestion: 'Check if the WhatsApp message ID is correct'
+      });
+    }
+    
+    const message = result.rows[0];
+    
+    res.json({
+      success: true,
+      message_id: message.id,
+      whatsapp_message_id: message.wa_message_id,
+      to: message.room_id,
+      status: message.status || 'unknown',
+      content_type: message.content_type,
+      content_text: message.content_text,
+      created_at: message.created_at,
+      metadata: message.metadata,
+      troubleshooting: {
+        possible_issues: [
+          'Recipient number not verified on WhatsApp',
+          'Need to use template message for new contacts',
+          'WhatsApp Business API limits',
+          'Message is in queue but not delivered yet'
+        ],
+        next_steps: [
+          'Check webhook logs for delivery status',
+          'Try sending template message first',
+          'Verify WhatsApp Business account status'
+        ]
+      }
+    });
+    
+  } catch (err) {
+    logger.error({ err, waMessageId: req.params.waMessageId }, 'Failed to debug message');
+    res.status(500).json({ error: 'Failed to debug message status' });
+  }
+});
+
+/**
+ * Send template message (recommended for new contacts)
+ * POST /messages/send-template
+ */
+router.post('/send-template', async (req, res) => {
+  try {
+    const { 
+      to, 
+      templateName, 
+      languageCode, 
+      parameters = [],
+      user_id = 'operator',
+      sender_name: fallback_sender_name = 'Operator'
+    } = req.body;
+    
+    // Get sender info from user table
+    const { user_id: finalUserId, sender_name } = await getSenderInfo(user_id, fallback_sender_name);
+    
+    if (!to || !templateName || !languageCode) {
+      return res.status(400).json({ 
+        error: 'Missing required fields: to, templateName, languageCode',
+        examples: {
+          basic: {
+            to: '6287879565390',
+            templateName: 'hello_world',
+            languageCode: 'en_US'
+          },
+          indonesian: {
+            to: '6287879565390',
+            templateName: 'hello_world',
+            languageCode: 'id_ID'
+          },
+          with_parameters: {
+            to: '6287879565390',
+            templateName: 'welcome_message',
+            languageCode: 'en_US',
+            parameters: ['John Doe', 'Premium Package', '2024']
+          },
+          explanation: 'Parameters will replace {{1}}, {{2}}, {{3}} etc. in your template. languageCode must match what you registered in Meta Business Manager.'
+        }
+      });
+    }
+    
+    const cleanPhone = validateWhatsAppPhoneNumber(to);
+    
+    // Ensure room exists
+    const templateFullRoomId = await ensureRoomAndGetId(cleanPhone);
+
+    // Insert DB row first
+    const messageId = uuidv4();
+    const templateMeta = { 
+      direction: 'outgoing', 
+      source: 'api', 
+      type: 'template', 
+      templateName, 
+      languageCode,
+      parameters: parameters.length > 0 ? parameters : undefined
+    };
+    
+    const messageData = {
+      id: messageId,
+      room_id: templateFullRoomId,
+      sender_id: finalUserId,
+      sender: sender_name,
+      content_type: 'template',
+      content_text: `Template: ${templateName}${parameters.length > 0 ? ` (${parameters.join(', ')})` : ''}`,
+      wa_message_id: null,
+      metadata: templateMeta,
+      created_at: new Date().toISOString()
+    };
+    
+    await insertMessage(messageData);
+
+    let result;
+    try {
+      result = await sendTemplateMessage(cleanPhone, templateName, languageCode, parameters);
+    } catch (sendErr) {
+      const failMeta = { ...templateMeta, send_error: sendErr.message };
+      await updateMessage(messageId, { metadata: failMeta });
+      throw Object.assign(new Error(sendErr.message), { _messageId: messageId });
+    }
+
+    const waMessageId = result.messages?.[0]?.id || null;
+    await updateMessage(messageId, { wa_message_id: waMessageId });
+
+    logger.info({ 
+      to: cleanPhone, 
+      templateName, 
+      parameters: parameters.length,
+      messageId, 
+      waMessageId 
+    }, 'Template message sent successfully');
+    
+    res.json({
+      success: true,
+      to: cleanPhone,
+      templateName,
+      languageCode,
+      parameters,
+      message_id: messageId,
+      whatsapp_message_id: waMessageId,
+      result
+    });
+    
+  } catch (err) {
+    logger.error({ err, body: req.body }, 'Failed to send template message');
+    
+    if (err._messageId) {
+      return res.status(500).json({ 
+        error: 'Failed to send template message', 
+        message: err.message, 
+        message_id: err._messageId 
+      });
+    }
+    
+    res.status(500).json({ 
+      error: 'Failed to send template message',
+      message: err.message,
+      suggestion: 'Make sure template exists and is approved in your WhatsApp Business account'
+    });
+  }
+});
+
+/**
+ * Get available template messages
+ * GET /messages/templates
+ */
+router.get('/templates', async (req, res) => {
+  try {
+    const { config } = await import('../config.js');
+    
+    const response = await fetch(`${config.whatsapp.baseUrl}/${config.whatsapp.graphVersion}/${config.whatsapp.phoneNumberId}/message_templates`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${config.whatsapp.accessToken}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    const data = await response.json();
+    
+    if (!response.ok) {
+      return res.status(400).json({ 
+        error: 'Failed to get templates',
+        details: data
+      });
+    }
+
+    // Filter only approved templates and format them nicely
+    const approvedTemplates = data.data
+      .filter(template => template.status === 'APPROVED')
+      .map(template => ({
+        name: template.name,
+        language: template.language,
+        status: template.status,
+        category: template.category,
+        components: template.components.map(comp => ({
+          type: comp.type,
+          text: comp.text,
+          parameters: comp.example?.body_text?.[0] || []
+        }))
+      }));
+
+    res.json({
+      success: true,
+      templates: approvedTemplates,
+      total: approvedTemplates.length,
+      usage_example: {
+        template_with_variables: {
+          name: 'welcome_message',
+          text: 'Hello {{1}}, welcome to {{2}}! Your order {{3}} is confirmed.',
+          parameters: ['John Doe', 'Our Store', 'ORD123'],
+          api_call: {
+            url: 'POST /messages/send-template',
+            body: {
+              to: '6287879565390',
+              templateName: 'welcome_message',
+              languageCode: 'en_US', // REQUIRED: must match language registered in Meta
+              parameters: ['John Doe', 'Our Store', 'ORD123']
+            }
+          }
+        },
+        why_language_code_required: "Even though templates are registered with Meta, WhatsApp API needs to know which language version to use since one template can have multiple language variants (en_US, id_ID, etc.)"
+      }
+    });
+
+  } catch (error) {
+    logger.error({ error }, 'Failed to get templates');
+    res.status(500).json({ 
+      error: 'Failed to get templates',
+      message: error.message 
+    });
+  }
+});
+
+/**
+ * Test template message with parameters
+ * POST /messages/test-template
+ */
+router.post('/test-template', async (req, res) => {
+  try {
+    const { to, templateName = 'hello_world', languageCode = 'en_US', parameters = [] } = req.body;
+    
+    if (!to) {
+      return res.status(400).json({ error: 'Phone number (to) required' });
+    }
+    
+    const cleanPhone = validateWhatsAppPhoneNumber(to);
+    
+    // Test dengan template umum atau yang user specify
+    const testTemplates = [
+      {
+        name: 'hello_world',
+        languageCode: 'en_US',
+        parameters: [],
+        description: 'Basic hello world template (usually available by default)'
+      },
+      {
+        name: 'sample_shipping_confirmation',
+        languageCode: 'en_US', 
+        parameters: ['John', '15', 'Oct 25'],
+        description: 'Sample template with parameters: Hello {{1}}, your package will arrive in {{2}} business days on {{3}}.'
+      }
+    ];
+    
+    // Use specified template or try defaults
+    const template = templateName === 'hello_world' && !parameters.length ? testTemplates[0] : {
+      name: templateName,
+      languageCode: languageCode,
+      parameters: parameters,
+      description: `Custom template: ${templateName} (${languageCode})`
+    };
+    
+    const result = await sendTemplateMessage(
+      cleanPhone, 
+      template.name, 
+      template.languageCode, 
+      template.parameters
+    );
+    
+    logger.info({ 
+      to: cleanPhone,
+      templateName: template.name,
+      parameters: template.parameters,
+      messageId: result.messages?.[0]?.id 
+    }, 'Test template message sent successfully');
+    
+    res.json({
+      success: true,
+      message: 'Test template message sent successfully',
+      to: cleanPhone,
+      template: template,
+      whatsapp_message_id: result.messages?.[0]?.id,
+      result,
+      note: 'If this fails, the template might not exist or not be approved in your WhatsApp Business account'
+    });
+    
+  } catch (err) {
+    logger.error({ err, body: req.body }, 'Failed to send test template message');
+    res.status(500).json({ 
+      error: 'Failed to send test template message',
+      message: err.message,
+      suggestions: [
+        'Check if template exists with GET /messages/templates',
+        'Make sure template is approved in WhatsApp Business Manager',
+        'Verify parameter count matches template variables {{1}}, {{2}}, etc.'
+      ]
+    });
+  }
+});
+
+/**
+ * Test database and storage operations
+ * POST /messages/test-db
+ */
+router.post('/test-db', async (req, res) => {
+  try {
+    const { to = '6287879565390' } = req.body;
+    const cleanPhone = validateWhatsAppPhoneNumber(to);
+    
+    // Test 1: Room creation
+    const testRoomId = await ensureRoomAndGetId(cleanPhone);
+    logger.info('✓ Room creation test passed');
+
+    // Test 2: Database insert
+    const messageId = uuidv4();
+    const testMessageData = {
+      id: messageId,
+      room_id: testRoomId,
+      sender_id: 'test-operator',
+      sender: 'Test Operator',
+      content_type: 'text',
+      content_text: 'Test message for debugging',
+      media_type: null,
+      media_id: null,
+      gcs_filename: null,
+      gcs_url: null,
+      file_size: null,
+      mime_type: null,
+      original_filename: null,
+      wa_message_id: null,
+      reply_to_wa_message_id: null,
+      reaction_emoji: null,
+      reaction_to_wa_message_id: null,
+      metadata: { direction: 'outgoing', source: 'test', type: 'text' },
+      created_at: new Date().toISOString()
+    };
+    
+    const insertResult = await insertMessage(testMessageData);
+    logger.info({ insertResult }, '✓ Database insert test passed');
+    
+    // Test 3: Database update
+    const updateResult = await updateMessage(messageId, {
+      wa_message_id: 'test-wa-id',
+      metadata: { direction: 'outgoing', source: 'test', type: 'text', test_update: true }
+    });
+    logger.info({ updateResult }, '✓ Database update test passed');
+    
+    res.json({
+      success: true,
+      message: 'All database tests passed',
+      tests: {
+        room_creation: '✓ Passed',
+        database_insert: '✓ Passed',  
+        database_update: '✓ Passed'
+      },
+      test_data: {
+        message_id: messageId,
+        room_id: cleanPhone,
+        insert_result: insertResult.rows[0],
+        update_result: updateResult.rows[0]
+      }
+    });
+    
+  } catch (err) {
+    logger.error({ err, body: req.body }, 'Database test failed');
+    res.status(500).json({ 
+      error: 'Database test failed',
+      message: err.message,
+      stack: err.stack
+    });
+  }
+});
+
+/**
+ * Test storage upload
+ * POST /messages/test-storage
+ */
+router.post('/test-storage', upload.single('media'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Media file required for storage test' });
+    }
+    
+    const { buffer, originalname, mimetype } = req.file;
+    const cleanPhone = '6287879565390';
+    
+    logger.info({ 
+      filename: originalname, 
+      mimetype, 
+      bufferSize: buffer.length,
+      bufferType: buffer.constructor.name
+    }, 'Starting storage test');
+    
+    // Test storage upload only
+    const storageResult = await uploadToGCS({
+      buffer,
+      filename: originalname,
+      contentType: mimetype,
+      folder: 'test-media',
+      roomId: cleanPhone,
+      phoneNumber: cleanPhone
+    });
+    
+    res.json({
+      success: true,
+      message: 'Storage test passed',
+      storage_result: storageResult,
+      file_info: {
+        original_name: originalname,
+        mime_type: mimetype,
+        buffer_size: buffer.length,
+        buffer_type: buffer.constructor.name
+      }
+    });
+    
+  } catch (err) {
+    logger.error({ err, body: req.body }, 'Storage test failed');
+    res.status(500).json({ 
+      error: 'Storage test failed',
+      message: err.message,
+      stack: err.stack
+    });
+  }
+});
+
+/**
+ * Get WhatsApp media caption support information
+ * GET /messages/caption-support
+ */
+router.get('/caption-support', async (req, res) => {
+  try {
+    res.json({
+      success: true,
+      message: 'WhatsApp Business API caption support by media type',
+      caption_support: {
+        image: {
+          supported: true,
+          behavior: 'Caption appears below the image in WhatsApp',
+          implementation: 'Sent directly with media message'
+        },
+        video: {
+          supported: true,
+          behavior: 'Caption appears below the video in WhatsApp',
+          implementation: 'Sent directly with media message'
+        },
+        audio: {
+          supported: false,
+          behavior: 'Caption is ignored by WhatsApp API',
+          implementation: 'Caption parameter ignored, not sent'
+        },
+        document: {
+          supported: false,
+          behavior: 'Caption is not supported by WhatsApp API',
+          implementation: 'Caption automatically sent as separate text message',
+          workaround: 'Our API automatically sends caption as separate text message after document'
+        }
+      },
+      api_behavior: {
+        '/messages/send-media-file': 'Auto-handles document captions as separate text messages',
+        '/messages/send-media-combined': 'Auto-handles document captions as separate text messages',
+        '/messages/send-media': 'Raw API - caption sent as-is (may be ignored for unsupported types)'
+      },
+      examples: {
+        image_with_caption: {
+          endpoint: 'POST /messages/send-media-file',
+          form_data: {
+            media: '[image file]',
+            to: '6287879565390',
+            caption: 'This caption will appear below the image'
+          },
+          result: 'Caption appears directly in WhatsApp'
+        },
+        document_with_caption: {
+          endpoint: 'POST /messages/send-media-file',
+          form_data: {
+            media: '[document file]',
+            to: '6287879565390',
+            caption: 'This will be sent as separate text message'
+          },
+          result: 'Document sent first, then separate text message with caption'
+        }
+      }
+    });
+  } catch (err) {
+    logger.error({ err }, 'Failed to get caption support info');
+    res.status(500).json({ error: 'Failed to get caption support info' });
   }
 });
 

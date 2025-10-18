@@ -5,23 +5,19 @@ export const config = {
   env: process.env.NODE_ENV || 'development',
   port: process.env.PORT || 8080,
   host: process.env.HOST || (process.env.NODE_ENV === 'production' ? '0.0.0.0' : 'localhost'), // localhost for dev, 0.0.0.0 for production
-  databaseUrl: process.env.DATABASE_URL,
   
-  // Firebase Admin SDK
+  // Supabase Configuration
+  supabase: {
+    url: process.env.SUPABASE_URL,
+    serviceKey: process.env.SUPABASE_SERVICE_KEY, // Service role key for server-side operations
+    anonKey: process.env.SUPABASE_ANON_KEY, // Anon key for client-side operations (if needed)
+    bucketName: process.env.SUPABASE_BUCKET_NAME || 'boztell',
+  },
+  
+  // Firebase Admin SDK (keeping for FCM notifications)
   firebase: {
     serviceAccount: process.env.FIREBASE_SERVICE_ACCOUNT, // JSON string or file path
     projectId: process.env.FIREBASE_PROJECT_ID
-  },
-
-  // Google Cloud Storage
-  gcs: {
-    bucketName: process.env.GCS_BUCKET_NAME || 'boztell-media-dev',
-    keyFilename: process.env.GOOGLE_APPLICATION_CREDENTIALS, // Service account key file path
-  projectId: process.env.GOOGLE_CLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID,
-  // Optional behaviors
-  makePublic: String(process.env.GCS_MAKE_PUBLIC || '').toLowerCase() === 'true',
-  urlSigning: process.env.GCS_URL_SIGNING || 'auto', // auto | enabled | disabled
-  publicBaseUrl: process.env.GCS_PUBLIC_BASE_URL || '' // e.g. https://storage.googleapis.com
   },
 
   whatsapp: {
@@ -29,11 +25,16 @@ export const config = {
     appSecret: process.env.WHATSAPP_SECRET,
     accessToken: process.env.WHATSAPP_ACCESS_TOKEN,
     phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID,
-    graphVersion: 'v23.0',
+    graphVersion: 'v24.0',
     baseUrl: 'https://graph.facebook.com'
   }
 };
 
-if (!config.databaseUrl) {
-  console.warn('[config] DATABASE_URL is not set');
+// Validation for Supabase configuration
+if (!config.supabase.url) {
+  console.warn('[config] SUPABASE_URL is not set');
+}
+
+if (!config.supabase.serviceKey) {
+  console.warn('[config] SUPABASE_SERVICE_KEY is not set');
 }

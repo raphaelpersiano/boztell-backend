@@ -1,167 +1,219 @@
-import { Storage } from '@google-cloud/storage';
+import { createClient } from '@supabase/supabase-js';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 import path from 'path';
 import fs from 'fs/promises';
 import { v4 as uuidv4 } from 'uuid';
 
-let storage;
+let supabase;
 let useLocalStorage = false;
 
 export function initializeStorage() {
-  if (storage) return storage;
+  if (supabase) return supabase;
 
   try {
-    // Check if we have GCS credentials
-    if (!config.gcs.bucketName || (!config.gcs.keyFilename && !config.gcs.projectId)) {
-      logger.warn('GCS credentials not found, using local storage for development');
+    // Check if we have Supabase credentials
+    if (!config.supabase.url || !config.supabase.serviceKey || !config.supabase.bucketName) {
+      logger.warn('Supabase credentials not found, using local storage for development');
       useLocalStorage = true;
       return null;
     }
 
-    const storageConfig = {};
+    supabase = createClient(config.supabase.url, config.supabase.serviceKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    });
     
-    if (config.gcs.keyFilename) {
-      storageConfig.keyFilename = config.gcs.keyFilename;
-    } else {
-      // Use default credentials in Cloud Run
-      storageConfig.projectId = config.gcs.projectId;
-    }
-
-  storage = new Storage(storageConfig);
-    logger.info('Google Cloud Storage initialized');
-    return storage;
+    logger.info('Supabase Storage initialized');
+    return supabase;
   } catch (err) {
-    logger.warn({ err }, 'Failed to initialize GCS, falling back to local storage');
+    logger.warn({ err }, 'Failed to initialize Supabase Storage, falling back to local storage');
     useLocalStorage = true;
     return null;
   }
 }
 
 /**
- * Upload buffer to GCS with organized folder structure
+ * Upload buffer to Supabase Storage with organized folder structure
  */
 export async function uploadBuffer({ buffer, filename, contentType, folder = 'media', roomId = null, phoneNumber = null }) {
-  if (!storage && !useLocalStorage) initializeStorage();
+  if (!supabase && !useLocalStorage) initializeStorage();
   const storedFilename = buildStoredFilename(filename, contentType);
   const fileId = uuidv4();
   
   // Create organized folder structure: room/date/file
-  const gcsFilename = generateOrganizedPath({ folder, roomId, phoneNumber, storedFilename });
+  const storagePath = generateOrganizedPath({ folder, roomId, phoneNumber, storedFilename });
 
   // Use local storage fallback for development
-  if (useLocalStorage || !storage) {
-    return await uploadToLocalStorage({ buffer, gcsFilename, contentType });
+  if (useLocalStorage || !supabase) {
+    return await uploadToLocalStorage({ buffer, gcsFilename: storagePath, contentType });
   }
 
-  // Use Google Cloud Storage
-  const bucket = storage.bucket(config.gcs.bucketName);
-  const file = bucket.file(gcsFilename);
-  
-  const metadata = {
-    metadata: {
-      originalName: filename || 'unknown',
-      uploadedAt: new Date().toISOString(),
-      contentType
-    },
-    contentType
-  };
-
   try {
-    await file.save(buffer, metadata);
+    // Validate buffer before upload
+    if (!Buffer.isBuffer(buffer)) {
+      throw new Error('Invalid buffer provided for upload');
+    }
+    
+    if (buffer.length === 0) {
+      throw new Error('Empty buffer provided for upload');
+    }
 
-    // Decide URL strategy
-    const url = await resolvePublicUrl(file, gcsFilename, { contentType });
+    logger.info({ 
+      storagePath, 
+      originalName: filename, 
+      contentType,
+      bufferSize: buffer.length,
+      bufferType: buffer.constructor.name
+    }, 'Starting Supabase Storage upload');
 
-    logger.info({ gcsFilename, originalName: filename }, 'File uploaded to GCS');
+    // Upload to Supabase Storage with proper options
+    const { data, error } = await supabase.storage
+      .from(config.supabase.bucketName)
+      .upload(storagePath, buffer, {
+        contentType: contentType || 'application/octet-stream',
+        cacheControl: '3600',
+        upsert: false, // Prevent accidental overwrites  
+        metadata: {
+          originalName: filename || 'unknown',
+          uploadedAt: new Date().toISOString(),
+          size: buffer.length.toString()
+        }
+      });
+
+    if (error) {
+      logger.error({ 
+        error, 
+        storagePath, 
+        bufferSize: buffer.length,
+        contentType 
+      }, 'Supabase Storage upload failed');
+      throw new Error(`Supabase upload error: ${error.message}`);
+    }
+
+    // Get public URL
+    const { data: urlData } = supabase.storage
+      .from(config.supabase.bucketName)
+      .getPublicUrl(storagePath);
+
+    const url = urlData.publicUrl;
+
+    logger.info({ 
+      storagePath, 
+      originalName: filename, 
+      uploadedPath: data.path,
+      publicUrl: url,
+      size: buffer.length 
+    }, 'File uploaded to Supabase Storage successfully');
 
     return {
       fileId,
-      gcsFilename,
+      gcsFilename: storagePath, // Keep same property name for compatibility
       originalFilename: filename,
       contentType,
       size: buffer.length,
       url,
-      bucket: config.gcs.bucketName
+      bucket: config.supabase.bucketName,
+      uploadedPath: data.path
     };
   } catch (err) {
-    logger.error({ err, gcsFilename }, 'Failed to upload to GCS');
+    logger.error({ 
+      err, 
+      storagePath, 
+      originalName: filename,
+      bufferSize: buffer?.length,
+      contentType 
+    }, 'Failed to upload to Supabase Storage');
     throw err;
   }
 }
 
 /**
- * Upload stream to GCS with organized folder structure
+ * Upload stream to Supabase Storage with organized folder structure
  */
 export async function uploadStream({ stream, filename, contentType, folder = 'media', roomId = null, phoneNumber = null }) {
-  if (!storage && !useLocalStorage) initializeStorage();
+  if (!supabase && !useLocalStorage) initializeStorage();
 
-  const bucket = storage.bucket(config.gcs.bucketName);
   const storedFilename = buildStoredFilename(filename, contentType);
   const fileId = uuidv4();
   
   // Create organized folder structure: room/date/file
-  const gcsFilename = generateOrganizedPath({ folder, roomId, phoneNumber, storedFilename });
+  const storagePath = generateOrganizedPath({ folder, roomId, phoneNumber, storedFilename });
   
-  const file = bucket.file(gcsFilename);
-  
-  const metadata = {
-    metadata: {
-      originalName: filename || 'unknown',
-      uploadedAt: new Date().toISOString(),
-      contentType
-    },
-    contentType
-  };
-
   return new Promise((resolve, reject) => {
-    const writeStream = file.createWriteStream({
-      metadata,
-      resumable: false // For smaller files
+    const chunks = [];
+    
+    stream.on('data', (chunk) => {
+      chunks.push(chunk);
     });
-
-    writeStream.on('error', reject);
-    writeStream.on('finish', async () => {
+    
+    stream.on('end', async () => {
       try {
-        // Get file metadata to determine size
-        const [meta] = await file.getMetadata();
-        const url = await resolvePublicUrl(file, gcsFilename, { contentType });
+        const buffer = Buffer.concat(chunks);
+        
+        // Upload to Supabase Storage
+        const { data, error } = await supabase.storage
+          .from(config.supabase.bucketName)
+          .upload(storagePath, buffer, {
+            contentType,
+            metadata: {
+              originalName: filename || 'unknown',
+              uploadedAt: new Date().toISOString()
+            }
+          });
 
-        logger.info({ gcsFilename, originalName: filename }, 'File streamed to GCS');
+        if (error) {
+          throw new Error(`Supabase upload error: ${error.message}`);
+        }
+
+        // Get public URL
+        const { data: urlData } = supabase.storage
+          .from(config.supabase.bucketName)
+          .getPublicUrl(storagePath);
+
+        const url = urlData.publicUrl;
+
+        logger.info({ storagePath, originalName: filename }, 'File streamed to Supabase Storage');
 
         resolve({
           fileId,
-          gcsFilename,
+          gcsFilename: storagePath, // Keep same property name for compatibility
           originalFilename: filename,
           contentType,
-          size: parseInt(meta.size),
+          size: buffer.length,
           url,
-          bucket: config.gcs.bucketName
+          bucket: config.supabase.bucketName
         });
       } catch (err) {
         reject(err);
       }
     });
-
-    stream.pipe(writeStream);
+    
+    stream.on('error', reject);
   });
 }
 
 /**
- * Delete file from GCS
+ * Delete file from Supabase Storage
  */
-export async function deleteFile(gcsFilename) {
-  if (!storage) initializeStorage();
-
-  const bucket = storage.bucket(config.gcs.bucketName);
-  const file = bucket.file(gcsFilename);
+export async function deleteFile(storagePath) {
+  if (!supabase) initializeStorage();
 
   try {
-    await file.delete();
-    logger.info({ gcsFilename }, 'File deleted from GCS');
+    const { error } = await supabase.storage
+      .from(config.supabase.bucketName)
+      .remove([storagePath]);
+
+    if (error) {
+      throw new Error(`Supabase delete error: ${error.message}`);
+    }
+
+    logger.info({ storagePath }, 'File deleted from Supabase Storage');
     return { success: true };
   } catch (err) {
-    logger.error({ err, gcsFilename }, 'Failed to delete from GCS');
+    logger.error({ err, storagePath }, 'Failed to delete from Supabase Storage');
     throw err;
   }
 }
@@ -169,77 +221,87 @@ export async function deleteFile(gcsFilename) {
 /**
  * Generate a new signed URL for an existing file
  */
-export async function generateSignedUrl(gcsFilename, expiresInDays = 7) {
-  if (!storage && !useLocalStorage) initializeStorage();
-
-  const bucket = storage.bucket(config.gcs.bucketName);
-  const file = bucket.file(gcsFilename);
+export async function generateSignedUrl(storagePath, expiresInDays = 7) {
+  if (!supabase && !useLocalStorage) initializeStorage();
 
   try {
-    // Honor config to disable signing or use auto with fallback
-    if (config.gcs.urlSigning === 'disabled') {
-      return buildPublicUrl(gcsFilename);
+    // Create signed URL for Supabase Storage
+    const { data, error } = await supabase.storage
+      .from(config.supabase.bucketName)
+      .createSignedUrl(storagePath, expiresInDays * 24 * 60 * 60); // Convert to seconds
+
+    if (error) {
+      logger.warn({ err: error.message, storagePath }, 'Signed URL failed, using public URL');
+      // Fallback to public URL
+      const { data: urlData } = supabase.storage
+        .from(config.supabase.bucketName)
+        .getPublicUrl(storagePath);
+      return urlData.publicUrl;
     }
 
-    const [url] = await file.getSignedUrl({
-      action: 'read',
-      expires: Date.now() + expiresInDays * 24 * 60 * 60 * 1000
-    });
-    return url;
+    return data.signedUrl;
   } catch (err) {
-    logger.warn({ err: err?.message, gcsFilename }, 'Signed URL failed, attempting public URL fallback');
-    try {
-      // Try makePublic if allowed
-      if (config.gcs.makePublic) {
-        await file.makePublic();
-      }
-    } catch (pubErr) {
-      logger.warn({ err: pubErr?.message }, 'makePublic failed');
-    }
-    return buildPublicUrl(gcsFilename);
+    logger.warn({ err: err?.message, storagePath }, 'Signed URL failed, attempting public URL fallback');
+    const { data: urlData } = supabase.storage
+      .from(config.supabase.bucketName)
+      .getPublicUrl(storagePath);
+    return urlData.publicUrl;
   }
 }
 
 /**
- * Check if file exists in GCS
+ * Check if file exists in Supabase Storage
  */
-export async function fileExists(gcsFilename) {
-  if (!storage && !useLocalStorage) initializeStorage();
-
-  const bucket = storage.bucket(config.gcs.bucketName);
-  const file = bucket.file(gcsFilename);
+export async function fileExists(storagePath) {
+  if (!supabase && !useLocalStorage) initializeStorage();
 
   try {
-    const [exists] = await file.exists();
-    return exists;
+    const { data, error } = await supabase.storage
+      .from(config.supabase.bucketName)
+      .list(path.dirname(storagePath), {
+        search: path.basename(storagePath)
+      });
+
+    if (error) {
+      logger.error({ err: error, storagePath }, 'Failed to check file existence');
+      return false;
+    }
+
+    return data && data.length > 0;
   } catch (err) {
-    logger.error({ err, gcsFilename }, 'Failed to check file existence');
+    logger.error({ err, storagePath }, 'Failed to check file existence');
     return false;
   }
 }
 
 /**
- * Get file metadata from GCS
+ * Get file metadata from Supabase Storage
  */
-export async function getFileMetadata(gcsFilename) {
-  if (!storage && !useLocalStorage) initializeStorage();
-
-  const bucket = storage.bucket(config.gcs.bucketName);
-  const file = bucket.file(gcsFilename);
+export async function getFileMetadata(storagePath) {
+  if (!supabase && !useLocalStorage) initializeStorage();
 
   try {
-    const [metadata] = await file.getMetadata();
+    const { data, error } = await supabase.storage
+      .from(config.supabase.bucketName)
+      .list(path.dirname(storagePath), {
+        search: path.basename(storagePath)
+      });
+
+    if (error || !data || data.length === 0) {
+      throw new Error(`File not found: ${storagePath}`);
+    }
+
+    const fileData = data[0];
     return {
-      name: metadata.name,
-      size: parseInt(metadata.size),
-      contentType: metadata.contentType,
-      created: metadata.timeCreated,
-      updated: metadata.updated,
-      md5Hash: metadata.md5Hash,
-      crc32c: metadata.crc32c
+      name: fileData.name,
+      size: fileData.metadata?.size || 0,
+      contentType: fileData.metadata?.mimetype || 'application/octet-stream',
+      created: fileData.created_at,
+      updated: fileData.updated_at,
+      id: fileData.id
     };
   } catch (err) {
-    logger.error({ err, gcsFilename }, 'Failed to get file metadata');
+    logger.error({ err, storagePath }, 'Failed to get file metadata');
     throw err;
   }
 }
@@ -251,24 +313,28 @@ export async function getFileMetadata(gcsFilename) {
  * List files in a specific phone number folder and date
  */
 export async function listMediaFiles({ roomId, phoneNumber, date, folder = 'media' }) {
-  if (!storage) initializeStorage();
+  if (!supabase) initializeStorage();
 
-  const bucket = storage.bucket(config.gcs.bucketName);
-  
   // Since roomId = phone number, use roomId directly
   const phoneFolder = cleanPhoneNumber(roomId || phoneNumber);
   const dateFolder = date || new Date().toISOString().split('T')[0];
-  const prefix = `${folder}/${phoneFolder}/${dateFolder}/`;
+  const prefix = `${folder}/${phoneFolder}/${dateFolder}`;
   
   try {
-    const [files] = await bucket.getFiles({ prefix });
+    const { data, error } = await supabase.storage
+      .from(config.supabase.bucketName)
+      .list(prefix);
+
+    if (error) {
+      throw new Error(`Supabase list error: ${error.message}`);
+    }
     
-    const fileList = files.map(file => ({
+    const fileList = data.map(file => ({
       name: file.name,
-      size: file.metadata.size,
-      contentType: file.metadata.contentType,
-      created: file.metadata.timeCreated,
-      updated: file.metadata.updated
+      size: file.metadata?.size || 0,
+      contentType: file.metadata?.mimetype || 'application/octet-stream',
+      created: file.created_at,
+      updated: file.updated_at
     }));
     
     logger.info({ phoneNumber: phoneFolder, date: dateFolder, count: fileList.length }, 'Listed media files');
@@ -284,23 +350,26 @@ export async function listMediaFiles({ roomId, phoneNumber, date, folder = 'medi
  * Get folder structure for a phone number (list all dates with media)
  */
 export async function getRoomMediaDates({ roomId, phoneNumber, folder = 'media' }) {
-  if (!storage) initializeStorage();
+  if (!supabase) initializeStorage();
 
-  const bucket = storage.bucket(config.gcs.bucketName);
-  
   // Since roomId = phone number, use roomId directly
   const phoneFolder = cleanPhoneNumber(roomId || phoneNumber);
-  const prefix = `${folder}/${phoneFolder}/`;
+  const prefix = `${folder}/${phoneFolder}`;
   
   try {
-    const [files] = await bucket.getFiles({ prefix });
+    const { data, error } = await supabase.storage
+      .from(config.supabase.bucketName)
+      .list(prefix);
+
+    if (error) {
+      throw new Error(`Supabase list error: ${error.message}`);
+    }
     
     // Extract unique date folders
     const dates = new Set();
-    files.forEach(file => {
-      const pathParts = file.name.replace(prefix, '').split('/');
-      if (pathParts.length >= 2 && pathParts[0].match(/^\d{4}-\d{2}-\d{2}$/)) {
-        dates.add(pathParts[0]);
+    data.forEach(item => {
+      if (item.name && item.name.match(/^\d{4}-\d{2}-\d{2}$/)) {
+        dates.add(item.name);
       }
     });
     
@@ -319,26 +388,38 @@ export async function getRoomMediaDates({ roomId, phoneNumber, folder = 'media' 
  * Get media usage statistics for a room
  */
 export async function getRoomMediaStats({ roomId, phoneNumber, folder = 'media' }) {
-  if (!storage) initializeStorage();
+  if (!supabase) initializeStorage();
 
-  const bucket = storage.bucket(config.gcs.bucketName);
-  
   // Since roomId = phone number, use roomId directly
   const phoneFolder = cleanPhoneNumber(roomId || phoneNumber || 'unknown');
-  const prefix = `${folder}/${phoneFolder}/`;
+  const prefix = `${folder}/${phoneFolder}`;
   
   try {
-    const [files] = await bucket.getFiles({ prefix });
+    // Get all files recursively from the phone folder
+    const { data, error } = await supabase.storage
+      .from(config.supabase.bucketName)
+      .list(prefix, {
+        limit: 1000, // Adjust based on expected file count
+        sortBy: { column: 'created_at', order: 'desc' }
+      });
+
+    if (error) {
+      throw new Error(`Supabase list error: ${error.message}`);
+    }
     
     let totalSize = 0;
     let totalFiles = 0;
     const typeCount = {};
     
-    files.forEach(file => {
-      totalSize += parseInt(file.metadata.size || 0);
+    // Note: Supabase Storage list may not return all nested files in one call
+    // For a more complete implementation, you might need to recursively list subdirectories
+    data.forEach(file => {
+      if (file.metadata?.size) {
+        totalSize += parseInt(file.metadata.size);
+      }
       totalFiles++;
       
-      const contentType = file.metadata.contentType || 'unknown';
+      const contentType = file.metadata?.mimetype || 'unknown';
       const mediaType = contentType.split('/')[0]; // image, video, audio, etc.
       typeCount[mediaType] = (typeCount[mediaType] || 0) + 1;
     });
@@ -464,17 +545,17 @@ async function uploadToLocalStorage({ buffer, gcsFilename, contentType }) {
     const fileStats = await fs.stat(fullPath);
     const localUrl = `http://localhost:${config.port}/uploads/${gcsFilename}`;
     
-    logger.info({ gcsFilename, size: fileStats.size }, 'File uploaded to local storage');
+    logger.info({ storagePath: gcsFilename, size: fileStats.size }, 'File uploaded to local storage');
     
     return {
-      gcsFilename,
+      gcsFilename, // Keep for compatibility
       url: localUrl,
       size: fileStats.size,
       contentType
     };
     
   } catch (err) {
-    logger.error({ err, gcsFilename }, 'Failed to upload to local storage');
+    logger.error({ err, storagePath: gcsFilename }, 'Failed to upload to local storage');
     throw err;
   }
 }
@@ -507,38 +588,5 @@ function cleanFilename(name) {
   return cleaned;
 }
 
-/**
- * Resolve a public URL for a GCS file, using signed URL if possible, or falling back to public URL.
- */
-async function resolvePublicUrl(file, gcsFilename, { contentType }) {
-  // If signing is explicitly disabled, return public URL immediately
-  if (config.gcs.urlSigning === 'disabled') {
-    // Optionally make public
-    if (config.gcs.makePublic) {
-      try { await file.makePublic(); } catch (_) {}
-    }
-    return buildPublicUrl(gcsFilename);
-  }
-
-  // Try signed URL first (auto or enabled)
-  try {
-    const [url] = await file.getSignedUrl({
-      action: 'read',
-      expires: Date.now() + 7 * 24 * 60 * 60 * 1000
-    });
-    return url;
-  } catch (err) {
-    // Fallback: make public if allowed, then build public URL
-    if (config.gcs.makePublic) {
-      try { await file.makePublic(); } catch (_) {}
-    }
-    return buildPublicUrl(gcsFilename);
-  }
-}
-
-/** Build a public URL based on config or standard storage.googleapis.com */
-function buildPublicUrl(gcsFilename) {
-  const base = config.gcs.publicBaseUrl?.trim() || 'https://storage.googleapis.com';
-  // When using storage.googleapis.com, path style is /bucket/object
-  return `${base.replace(/\/$/, '')}/${config.gcs.bucketName}/${encodeURI(gcsFilename)}`;
-}
+// These functions are no longer needed with Supabase Storage
+// Public URLs are handled directly through supabase.storage.getPublicUrl()

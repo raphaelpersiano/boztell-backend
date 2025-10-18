@@ -84,11 +84,9 @@ async function processIncomingMessage(io, message, value) {
     const contact = contacts.find(c => c.wa_id === from) || {};
     const senderName = contact.profile?.name || from;
     
-    // Determine room_id (customize based on your business logic)
-    const roomId = determineRoomId(from, metadata);
-    
-  // Ensure room exists
-  await ensureRoom(roomId, { customerPhone: from, customerName: senderName });
+    // Ensure room exists and get room ID
+    const room = await ensureRoom(from, { phone: from, title: senderName || 'Personal' });
+    const roomId = room.id;
 
   const baseMessage = {
       room_id: roomId,
@@ -393,12 +391,4 @@ async function handleReferralMessage(io, messageData) {
   });
 }
 
-/**
- * Determine room ID based on business logic
- * In WhatsApp: 1 room = 1 phone number (customer phone number)
- */
-function determineRoomId(from, metadata) {
-  // Simple approach: use customer phone number as room ID
-  // Each customer phone number = one chat room
-  return from; // from is the customer's WhatsApp phone number
-}
+
