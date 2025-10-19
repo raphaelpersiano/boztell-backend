@@ -25,6 +25,7 @@ export const config = {
     appSecret: process.env.WHATSAPP_SECRET,
     accessToken: process.env.WHATSAPP_ACCESS_TOKEN,
     phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID,
+    businessAccountId: process.env.WHATSAPP_BUSINESS_ACCOUNT_ID,
     graphVersion: 'v24.0',
     baseUrl: 'https://graph.facebook.com'
   }

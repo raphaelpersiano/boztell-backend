@@ -90,8 +90,7 @@ async function processIncomingMessage(io, message, value) {
 
   const baseMessage = {
       room_id: roomId,
-      sender_id: from,
-      sender: senderName,
+      user_id: null, // Customer messages have user_id as null
       wa_message_id,
       timestamp: parseInt(timestamp) * 1000, // Convert to milliseconds
       type,
@@ -168,15 +167,14 @@ async function handleTextMessage(io, messageData) {
   try {
     const result = await handleIncomingMessage({ io }, {
       room_id: messageData.room_id,
-      sender_id: messageData.sender_id,
-      sender: messageData.sender,
+      user_id: messageData.user_id, // null for customer messages
       content_type: 'text',
       content_text: messageData.text.body,
       wa_message_id: messageData.wa_message_id,
       metadata: { 
-  timestamp: messageData.timestamp,
-  type: 'text',
-  reply_to: messageData.context?.id || null
+        timestamp: messageData.timestamp,
+        type: 'text',
+        reply_to: messageData.context?.id || null
       }
     });
     
@@ -208,8 +206,7 @@ async function handleMediaMessage(io, messageData) {
   
   return await handleIncomingMedia({ io }, {
     room_id: messageData.room_id,
-    sender_id: messageData.sender_id,
-    sender: messageData.sender,
+    user_id: messageData.user_id, // null for customer messages
     media_type: type,
     media_id: media.id,
     caption: media.caption || '',
@@ -217,7 +214,7 @@ async function handleMediaMessage(io, messageData) {
     mime_type: media.mime_type || null,
     sha256: media.sha256 || null,
     wa_message_id: messageData.wa_message_id,
-  metadata: { timestamp: messageData.timestamp, reply_to: messageData.context?.id || null }
+    metadata: { timestamp: messageData.timestamp, reply_to: messageData.context?.id || null }
   });
 }
 
@@ -229,8 +226,7 @@ async function handleLocationMessage(io, messageData) {
   
   return await handleIncomingMessage({ io }, {
     room_id: messageData.room_id,
-    sender_id: messageData.sender_id,
-    sender: messageData.sender,
+    user_id: messageData.user_id, // null for customer messages
     content_type: 'location',
     content_text: `Location: ${location.latitude}, ${location.longitude}`,
     wa_message_id: messageData.wa_message_id,
@@ -256,8 +252,7 @@ async function handleContactsMessage(io, messageData) {
   
   return await handleIncomingMessage({ io }, {
     room_id: messageData.room_id,
-    sender_id: messageData.sender_id,
-    sender: messageData.sender,
+    user_id: messageData.user_id, // null for customer messages
     content_type: 'contacts',
     content_text: `Shared contacts: ${contactsList}`,
     wa_message_id: messageData.wa_message_id,
@@ -277,8 +272,7 @@ async function handleReactionMessage(io, messageData) {
   const text = `Reaction ${reaction.emoji} to ${reaction.message_id}`;
   return await handleIncomingMessage({ io }, {
     room_id: messageData.room_id,
-    sender_id: messageData.sender_id,
-    sender: messageData.sender,
+    user_id: messageData.user_id, // null for customer messages
     content_type: 'reaction',
     content_text: text,
     wa_message_id: messageData.wa_message_id,
@@ -315,8 +309,7 @@ async function handleInteractiveMessage(io, messageData) {
   
   return await handleIncomingMessage({ io }, {
     room_id: messageData.room_id,
-    sender_id: messageData.sender_id,
-    sender: messageData.sender,
+    user_id: messageData.user_id, // null for customer messages
     content_type: 'interactive',
     content_text: responseText,
     wa_message_id: messageData.wa_message_id,
@@ -336,8 +329,7 @@ async function handleButtonMessage(io, messageData) {
   
   return await handleIncomingMessage({ io }, {
     room_id: messageData.room_id,
-    sender_id: messageData.sender_id,
-    sender: messageData.sender,
+    user_id: messageData.user_id, // null for customer messages
     content_type: 'button',
     content_text: `Button: ${button.text}`,
     wa_message_id: messageData.wa_message_id,
@@ -357,8 +349,7 @@ async function handleOrderMessage(io, messageData) {
   
   return await handleIncomingMessage({ io }, {
     room_id: messageData.room_id,
-    sender_id: messageData.sender_id,
-    sender: messageData.sender,
+    user_id: messageData.user_id, // null for customer messages
     content_type: 'order',
     content_text: `Order placed with ${order.product_items?.length || 0} items`,
     wa_message_id: messageData.wa_message_id,
@@ -378,8 +369,7 @@ async function handleReferralMessage(io, messageData) {
   
   return await handleIncomingMessage({ io }, {
     room_id: messageData.room_id,
-    sender_id: messageData.sender_id,
-    sender: messageData.sender,
+    user_id: messageData.user_id, // null for customer messages
     content_type: 'referral',
     content_text: `Referral from ${referral.source_type}: ${referral.source_id}`,
     wa_message_id: messageData.wa_message_id,

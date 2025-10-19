@@ -362,10 +362,18 @@ async function callWhatsAppAPI(endpoint, payload = null, method = 'POST') {
   
   const data = await response.json();
   
-  logger.debug({ 
+  logger.info({ 
     status: response.status,
-    messageId: data.messages?.[0]?.id 
-  }, 'WhatsApp API call successful');
+    fullResponseData: data,
+    dataType: typeof data,
+    dataKeys: data ? Object.keys(data) : null,
+    messagesField: data.messages,
+    messagesType: typeof data.messages,
+    messagesLength: data.messages?.length,
+    firstMessage: data.messages?.[0],
+    messageId: data.messages?.[0]?.id,
+    messageIdType: typeof data.messages?.[0]?.id
+  }, 'WhatsApp API raw response analysis');
   
   return data;
 }

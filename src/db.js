@@ -211,22 +211,28 @@ export async function getRoomByPhone(phone) {
   const { data, error } = await supabase
     .from('rooms')
     .select('*')
-    .eq('phone', phone)
-    .single();
+    .eq('phone', phone);
     
   if (error) {
-    if (error.code === 'PGRST116') {
-      return { rows: [], rowCount: 0 };
-    }
     throw new Error(`Get room by phone failed: ${error.message}`);
   }
   
-  return { rows: [data], rowCount: 1 };
+  if (!data || data.length === 0) {
+    return { rows: [], rowCount: 0 };
+  }
+  
+  return { rows: data, rowCount: data.length };
 }
 
 export async function insertRoom(roomData) {
   if (!supabase) {
     throw new Error('Supabase client not initialized');
+  }
+  
+  // Ensure room has an ID - fallback to client-generated UUID if not provided by database
+  if (!roomData.id) {
+    const { v4: uuidv4 } = await import('uuid');
+    roomData = { id: uuidv4(), ...roomData };
   }
   
   const { data, error } = await supabase

@@ -1,3 +1,4 @@
+import { v4 as uuidv4 } from 'uuid';
 import { getRoomById, getRoomByPhone as getRoomByPhoneDb, insertRoom, updateRoom, deleteRoom as deleteRoomDb, listRooms as listRoomsDb } from '../db.js';
 import { logger } from '../utils/logger.js';
 
@@ -10,11 +11,11 @@ import { logger } from '../utils/logger.js';
 export async function ensureRoom(phone, metadata = {}) {
   try {
     // Check if room already exists by phone number
-    const { rows: existingRooms } = await getRoomByPhone(phone);
+    const existingResult = await getRoomByPhoneDb(phone);
     
-    if (existingRooms.length > 0) {
+    if (existingResult && existingResult.rows && existingResult.rows.length > 0) {
       logger.debug({ phone }, 'Room already exists');
-      return existingRooms[0];
+      return existingResult.rows[0];
     }
     
     // Create new room with UUID id
@@ -22,6 +23,7 @@ export async function ensureRoom(phone, metadata = {}) {
     const leadsId = metadata.leads_id || null;
     
     const roomData = {
+      id: uuidv4(), // Generate UUID for room ID
       leads_id: leadsId,
       phone: phone,
       title: roomTitle,
@@ -29,8 +31,13 @@ export async function ensureRoom(phone, metadata = {}) {
       updated_at: new Date().toISOString()
     };
     
-    const { rows: newRooms } = await insertRoom(roomData);
-    const newRoom = newRooms[0];
+    const insertResult = await insertRoom(roomData);
+    
+    if (!insertResult || !insertResult.rows || insertResult.rows.length === 0) {
+      throw new Error('Failed to create new room - no data returned');
+    }
+    
+    const newRoom = insertResult.rows[0];
     
     logger.info({ 
       roomId: newRoom.id,
@@ -64,14 +71,14 @@ export async function updateRoomMetadata(roomId, updates) {
     if (updates.leads_id) updateData.leads_id = updates.leads_id;
     if (updates.phone) updateData.phone = updates.phone;
     
-    const { rows } = await updateRoom(roomId, updateData);
+    const result = await updateRoom(roomId, updateData);
     
-    if (rows.length === 0) {
+    if (!result || !result.rows || result.rows.length === 0) {
       throw new Error(`Room ${roomId} not found`);
     }
     
     logger.debug({ roomId }, 'Room metadata updated');
-    return rows[0];
+    return result.rows[0];
     
   } catch (err) {
     logger.error({ err, roomId }, 'Failed to update room metadata');
@@ -86,8 +93,8 @@ export async function updateRoomMetadata(roomId, updates) {
  */
 export async function getRoom(roomId) {
   try {
-    const { rows } = await getRoomById(roomId);
-    return rows.length > 0 ? rows[0] : null;
+    const result = await getRoomById(roomId);
+    return (result && result.rows && result.rows.length > 0) ? result.rows[0] : null;
   } catch (err) {
     logger.error({ err, roomId }, 'Failed to get room');
     throw err;
@@ -101,8 +108,8 @@ export async function getRoom(roomId) {
  */
 export async function getRoomByPhone(phone) {
   try {
-    const { rows } = await getRoomByPhoneDb(phone);
-    return rows.length > 0 ? rows[0] : null;
+    const result = await getRoomByPhoneDb(phone);
+    return (result && result.rows && result.rows.length > 0) ? result.rows[0] : null;
   } catch (err) {
     logger.error({ err, phone }, 'Failed to get room by phone');
     throw err;
@@ -116,8 +123,8 @@ export async function getRoomByPhone(phone) {
  */
 export async function listRooms(options = {}) {
   try {
-    const { rows } = await listRoomsDb(options);
-    return rows;
+    const result = await listRoomsDb(options);
+    return (result && result.rows) ? result.rows : [];
   } catch (err) {
     logger.error({ err, options }, 'Failed to list rooms');
     throw err;
@@ -131,9 +138,9 @@ export async function listRooms(options = {}) {
  */
 export async function deleteRoom(roomId) {
   try {
-    const { rowCount } = await deleteRoomDb(roomId);
+    const result = await deleteRoomDb(roomId);
     
-    if (rowCount === 0) {
+    if (!result || result.rowCount === 0) {
       throw new Error(`Room ${roomId} not found`);
     }
     

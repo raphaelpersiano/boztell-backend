@@ -43,26 +43,26 @@ const upload = multer({
 });
 
 /**
- * Helper function to get sender name from user_id
+ * Helper function to validate user_id
  */
-async function getSenderInfo(user_id, fallback_sender_name = 'Operator') {
+async function validateUserId(user_id) {
   try {
-    if (!user_id || user_id === 'operator') {
-      return { user_id: 'operator', sender_name: fallback_sender_name };
+    // If no user_id provided, it's a customer message (null)
+    if (!user_id) {
+      return null;
     }
     
+    // Validate that user exists in database
     const user = await getUserForMessage(user_id);
-    if (user && user.name) {
-      return { user_id, sender_name: user.name };
+    if (!user) {
+      throw new Error(`User not found for user_id: ${user_id}`);
     }
     
-    // Fallback if user not found
-    logger.warn(`User not found for user_id: ${user_id}, using fallback`);
-    return { user_id, sender_name: fallback_sender_name };
+    return user_id;
     
   } catch (error) {
-    logger.error('Error getting sender info:', error);
-    return { user_id, sender_name: fallback_sender_name };
+    logger.error({ err: error, user_id }, 'Error validating user_id');
+    throw error;
   }
 }
 
@@ -80,10 +80,10 @@ async function ensureRoomAndGetId(phone, metadata = {}) {
  */
 router.post('/send', async (req, res) => {
   try {
-    const { to, text, type = 'text', user_id = 'operator', sender_name: fallback_sender_name = 'Operator', ...options } = req.body;
+    const { to, text, type = 'text', user_id, ...options } = req.body;
     
-    // Get sender info from user table
-    const { user_id: finalUserId, sender_name } = await getSenderInfo(user_id, fallback_sender_name);
+    // Validate user_id if provided
+    const validatedUserId = await validateUserId(user_id);
     
     if (!to || !text) {
       return res.status(400).json({ 
@@ -117,8 +117,7 @@ router.post('/send', async (req, res) => {
         const messageData = {
           id: messageId,
           room_id: textRoom.id,
-          sender_id: finalUserId,
-          sender: sender_name,
+          user_id: validatedUserId,
           content_type: 'text',
           content_text: text,
           media_type: null,
@@ -134,7 +133,12 @@ router.post('/send', async (req, res) => {
           created_at: new Date().toISOString()
         };
         
-        await insertMessage(messageData);
+        try {
+          await insertMessage(messageData);
+        } catch (insertErr) {
+          logger.error({ err: insertErr, messageId, to: cleanPhone }, 'Failed to insert text message to database');
+          throw new Error(`Database insert failed: ${insertErr.message}`);
+        }
 
         // 2) Send to WhatsApp
         try {
@@ -184,8 +188,7 @@ router.post('/send', async (req, res) => {
         const templateMessageData = {
           id: templateMessageId,
           room_id: templateRoomId,
-          sender_id: finalUserId,
-          sender: sender_name,
+          user_id: validatedUserId,
           content_type: 'template',
           content_text: `Template: ${templateName}`,
           wa_message_id: null,
@@ -248,10 +251,10 @@ router.post('/send', async (req, res) => {
  */
 router.post('/send-contacts', async (req, res) => {
   try {
-    const { to, contacts, replyTo, user_id = 'operator', sender_name: fallback_sender_name = 'Operator' } = req.body;
+    const { to, contacts, replyTo, user_id } = req.body;
     
-    // Get sender info from user table
-    const { user_id: finalUserId, sender_name } = await getSenderInfo(user_id, fallback_sender_name);
+    // Validate user_id if provided
+    const validatedUserId = await validateUserId(user_id);
     if (!to || !Array.isArray(contacts) || contacts.length === 0) {
       return res.status(400).json({ error: 'to and contacts[] required' });
     }
@@ -266,8 +269,7 @@ router.post('/send-contacts', async (req, res) => {
     const messageData = {
       id: messageId,
       room_id: contactsRoomId,
-      sender_id: finalUserId,
-      sender: sender_name,
+      user_id: validatedUserId,
       content_type: 'contacts',
       content_text: `contacts:${contacts.length}`,
       media_type: null,
@@ -308,10 +310,10 @@ router.post('/send-contacts', async (req, res) => {
  */
 router.post('/send-location', async (req, res) => {
   try {
-    const { to, location, replyTo, user_id = 'operator', sender_name: fallback_sender_name = 'Operator' } = req.body;
+    const { to, location, replyTo, user_id } = req.body;
     
-    // Get sender info from user table
-    const { user_id: finalUserId, sender_name } = await getSenderInfo(user_id, fallback_sender_name);
+    // Validate user_id if provided
+    const validatedUserId = await validateUserId(user_id);
     if (!to || !location || typeof location.latitude !== 'number' || typeof location.longitude !== 'number') {
       return res.status(400).json({ error: 'to and location.latitude/longitude required' });
     }
@@ -325,8 +327,7 @@ router.post('/send-location', async (req, res) => {
     const messageData = {
       id: messageId,
       room_id: locationRoomId,
-      sender_id: finalUserId,
-      sender: sender_name,
+      user_id: validatedUserId,
       content_type: 'location',
       content_text: `Location: ${location.latitude}, ${location.longitude}`,
       media_type: null,
@@ -367,7 +368,10 @@ router.post('/send-location', async (req, res) => {
  */
 router.post('/send-reaction', async (req, res) => {
   try {
-    const { to, message_id, emoji, user_id = 'operator', sender_name = 'Operator' } = req.body;
+    const { to, message_id, emoji, user_id } = req.body;
+    
+    // Validate user_id if provided
+    const validatedUserId = await validateUserId(user_id);
     if (!to || !message_id || !emoji) {
       return res.status(400).json({ error: 'to, message_id, and emoji are required' });
     }
@@ -380,8 +384,7 @@ router.post('/send-reaction', async (req, res) => {
     const messageData = {
       id: messageId,
       room_id: reactionRoomId,
-      sender_id: user_id,
-      sender: sender_name,
+      user_id: validatedUserId,
       content_type: 'reaction',
       content_text: `Reaction ${emoji} to ${message_id}`,
       media_type: null,
@@ -550,8 +553,7 @@ router.post('/send-media-file', upload.single('media'), async (req, res) => {
         const textMessageData = {
           id: textMessageDbId,
           room_id: textRoomId,
-          sender_id: 'operator',
-          sender: 'Operator',
+          user_id: null, // Document caption messages are system messages
           content_type: 'text',
           content_text: caption.trim(),
           media_type: null,
@@ -648,10 +650,10 @@ router.post('/send-media-file', upload.single('media'), async (req, res) => {
  */
 router.post('/send-media-combined', upload.single('media'), async (req, res) => {
   try {
-    const { to, caption = '', user_id = null, sender_name: fallback_sender_name = 'Operator' } = req.body;
+    const { to, caption = '', user_id } = req.body;
     
-    // Get sender info from user table
-    const { user_id: finalUserId, sender_name } = await getSenderInfo(user_id, fallback_sender_name);
+    // Validate user_id if provided
+    const validatedUserId = await validateUserId(user_id);
 
     if (!to) {
       return res.status(400).json({ error: 'Phone number (to) required' });
@@ -739,8 +741,7 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
           const textMessageData = {
             id: textMessageDbId,
             room_id: cleanPhone,
-            sender_id: finalUserId,
-            sender: sender_name,
+            user_id: validatedUserId,
             content_type: 'text',
             content_text: caption.trim(),
             media_type: null,
@@ -806,8 +807,7 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
       const messageData = {
         id: messageId,
         room_id: mediaRoomId,
-        sender_id: finalUserId,
-        sender: sender_name,
+        user_id: validatedUserId,
         content_type: 'media',
         content_text: caption || '',
         media_type: mediaType,
@@ -1024,12 +1024,11 @@ router.post('/send-template', async (req, res) => {
       templateName, 
       languageCode, 
       parameters = [],
-      user_id = 'operator',
-      sender_name: fallback_sender_name = 'Operator'
+      user_id
     } = req.body;
     
-    // Get sender info from user table
-    const { user_id: finalUserId, sender_name } = await getSenderInfo(user_id, fallback_sender_name);
+    // Validate user_id if provided
+    const validatedUserId = await validateUserId(user_id);
     
     if (!to || !templateName || !languageCode) {
       return res.status(400).json({ 
@@ -1061,7 +1060,44 @@ router.post('/send-template', async (req, res) => {
     // Ensure room exists
     const templateFullRoomId = await ensureRoomAndGetId(cleanPhone);
 
-    // Insert DB row first
+    // Send template message first
+    let result;
+    try {
+      result = await sendTemplateMessage(cleanPhone, templateName, languageCode, parameters);
+      logger.info({ 
+        templateName,
+        fullResult: result,
+        resultType: typeof result,
+        resultKeys: Object.keys(result || {}),
+        messages: result?.messages,
+        messagesLength: result?.messages?.length,
+        firstMessage: result?.messages?.[0],
+        firstMessageType: typeof result?.messages?.[0],
+        firstMessageKeys: result?.messages?.[0] ? Object.keys(result.messages[0]) : null
+      }, 'WhatsApp API full response analysis');
+    } catch (sendErr) {
+      logger.error({ err: sendErr, templateName, to: cleanPhone }, 'Failed to send template message to WhatsApp');
+      throw new Error(`WhatsApp send failed: ${sendErr.message}`);
+    }
+
+    const waMessageId = result.messages?.[0]?.id || null;
+    
+    logger.info({ 
+      templateName,
+      waMessageIdFromResponse: waMessageId,
+      waMessageIdType: typeof waMessageId,
+      responseMessages: result.messages,
+      extractionPath: 'result.messages[0].id',
+      extractionResult: {
+        'result': !!result,
+        'result.messages': !!result?.messages,
+        'result.messages.length': result?.messages?.length,
+        'result.messages[0]': !!result?.messages?.[0],
+        'result.messages[0].id': result?.messages?.[0]?.id
+      }
+    }, 'WhatsApp message ID extraction analysis');
+
+    // Insert to database with WhatsApp message ID included
     const messageId = uuidv4();
     const templateMeta = { 
       direction: 'outgoing', 
@@ -1075,28 +1111,55 @@ router.post('/send-template', async (req, res) => {
     const messageData = {
       id: messageId,
       room_id: templateFullRoomId,
-      sender_id: finalUserId,
-      sender: sender_name,
+      user_id: validatedUserId,
       content_type: 'template',
       content_text: `Template: ${templateName}${parameters.length > 0 ? ` (${parameters.join(', ')})` : ''}`,
-      wa_message_id: null,
+      media_type: null,
+      media_id: null,
+      gcs_filename: null,
+      gcs_url: null,
+      file_size: null,
+      mime_type: null,
+      original_filename: null,
+      wa_message_id: waMessageId, // Insert with WhatsApp message ID
+      reply_to_wa_message_id: null,
+      reaction_emoji: null,
+      reaction_to_wa_message_id: null,
       metadata: templateMeta,
       created_at: new Date().toISOString()
     };
     
-    await insertMessage(messageData);
-
-    let result;
     try {
-      result = await sendTemplateMessage(cleanPhone, templateName, languageCode, parameters);
-    } catch (sendErr) {
-      const failMeta = { ...templateMeta, send_error: sendErr.message };
-      await updateMessage(messageId, { metadata: failMeta });
-      throw Object.assign(new Error(sendErr.message), { _messageId: messageId });
+      logger.info({ 
+        messageId, 
+        waMessageId,
+        templateName,
+        messageDataPreview: {
+          id: messageData.id,
+          wa_message_id: messageData.wa_message_id,
+          content_text: messageData.content_text,
+          room_id: messageData.room_id
+        }
+      }, 'About to insert template message to database');
+      
+      await insertMessage(messageData);
+      
+      logger.info({ 
+        messageId, 
+        waMessageId,
+        templateName,
+        insertSuccess: true
+      }, 'Template message sent and saved to database successfully');
+    } catch (insertErr) {
+      logger.error({ 
+        err: insertErr, 
+        messageId, 
+        waMessageId, 
+        templateName,
+        messageDataAtError: messageData
+      }, 'Failed to insert template message to database (message already sent to WhatsApp)');
+      // Don't throw error here since WhatsApp message was sent successfully
     }
-
-    const waMessageId = result.messages?.[0]?.id || null;
-    await updateMessage(messageId, { wa_message_id: waMessageId });
 
     logger.info({ 
       to: cleanPhone, 
@@ -1114,6 +1177,11 @@ router.post('/send-template', async (req, res) => {
       parameters,
       message_id: messageId,
       whatsapp_message_id: waMessageId,
+      database_saved: {
+        message_id: messageId,
+        whatsapp_message_id: waMessageId,
+        room_id: templateFullRoomId
+      },
       result
     });
     
@@ -1144,7 +1212,21 @@ router.get('/templates', async (req, res) => {
   try {
     const { config } = await import('../config.js');
     
-    const response = await fetch(`${config.whatsapp.baseUrl}/${config.whatsapp.graphVersion}/${config.whatsapp.phoneNumberId}/message_templates`, {
+    if (!config.whatsapp.businessAccountId) {
+      return res.status(500).json({
+        error: 'WhatsApp Business Account ID not configured',
+        message: 'Please set WHATSAPP_BUSINESS_ACCOUNT_ID in your environment variables',
+        how_to_find: [
+          '1. Go to Meta Business Manager (business.facebook.com)',
+          '2. Select your WhatsApp Business Account',
+          '3. The ID is in the URL or Account Settings',
+          '4. Set WHATSAPP_BUSINESS_ACCOUNT_ID=your_account_id in .env file'
+        ]
+      });
+    }
+    
+    // Use WhatsApp Business Account ID, not Phone Number ID for templates
+    const response = await fetch(`${config.whatsapp.baseUrl}/${config.whatsapp.graphVersion}/${config.whatsapp.businessAccountId}/message_templates`, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${config.whatsapp.accessToken}`,
@@ -1161,6 +1243,12 @@ router.get('/templates', async (req, res) => {
       });
     }
 
+    // Log raw data for debugging
+    logger.info({ 
+      totalTemplates: data.data?.length || 0,
+      templates: data.data?.map(t => ({ name: t.name, status: t.status, language: t.language })) || []
+    }, 'Raw templates from WhatsApp API');
+
     // Filter only approved templates and format them nicely
     const approvedTemplates = data.data
       .filter(template => template.status === 'APPROVED')
@@ -1176,10 +1264,26 @@ router.get('/templates', async (req, res) => {
         }))
       }));
 
+    // Count templates by status for debugging
+    const statusCounts = data.data.reduce((acc, template) => {
+      acc[template.status] = (acc[template.status] || 0) + 1;
+      return acc;
+    }, {});
+
     res.json({
       success: true,
       templates: approvedTemplates,
       total: approvedTemplates.length,
+      debug_info: {
+        total_templates_from_meta: data.data?.length || 0,
+        templates_by_status: statusCounts,
+        all_templates: data.data?.map(t => ({
+          name: t.name,
+          status: t.status,
+          language: t.language,
+          category: t.category
+        })) || []
+      },
       usage_example: {
         template_with_variables: {
           name: 'welcome_message',
@@ -1302,8 +1406,7 @@ router.post('/test-db', async (req, res) => {
     const testMessageData = {
       id: messageId,
       room_id: testRoomId,
-      sender_id: 'test-operator',
-      sender: 'Test Operator',
+      user_id: null, // Test message as customer message
       content_type: 'text',
       content_text: 'Test message for debugging',
       media_type: null,
@@ -1470,6 +1573,131 @@ router.get('/caption-support', async (req, res) => {
   } catch (err) {
     logger.error({ err }, 'Failed to get caption support info');
     res.status(500).json({ error: 'Failed to get caption support info' });
+  }
+});
+
+/**
+ * Get message from database by message ID
+ * GET /messages/verify/:messageId
+ */
+router.get('/verify/:messageId', async (req, res) => {
+  try {
+    const { messageId } = req.params;
+    
+    const { getMessage } = await import('../db.js');
+    const result = await getMessage(messageId);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ 
+        error: 'Message not found in database',
+        message_id: messageId
+      });
+    }
+    
+    const message = result.rows[0];
+    
+    res.json({
+      success: true,
+      message_found: true,
+      message: {
+        id: message.id,
+        room_id: message.room_id,
+        sender_id: message.sender_id,
+        sender: message.sender,
+        content_type: message.content_type,
+        content_text: message.content_text,
+        wa_message_id: message.wa_message_id,
+        metadata: message.metadata,
+        created_at: message.created_at,
+        updated_at: message.updated_at
+      },
+      whatsapp_message_id_saved: !!message.wa_message_id,
+      database_check: 'Message found and WhatsApp message ID is ' + (message.wa_message_id ? 'saved' : 'NOT saved')
+    });
+    
+  } catch (err) {
+    logger.error({ err, messageId: req.params.messageId }, 'Failed to verify message in database');
+    res.status(500).json({ 
+      error: 'Failed to verify message in database',
+      message: err.message 
+    });
+  }
+});
+
+/**
+ * Debug WhatsApp template response
+ * POST /messages/debug-template-response
+ */
+router.post('/debug-template-response', async (req, res) => {
+  try {
+    const { 
+      to = '6287879565390', 
+      templateName = 'hello_world', 
+      languageCode = 'en_US', 
+      parameters = []
+    } = req.body;
+    
+    const cleanPhone = validateWhatsAppPhoneNumber(to);
+    
+    logger.info({ 
+      to: cleanPhone,
+      templateName,
+      languageCode,
+      parameters
+    }, 'Starting WhatsApp template response debug');
+    
+    // Send template message and analyze response
+    let result;
+    try {
+      result = await sendTemplateMessage(cleanPhone, templateName, languageCode, parameters);
+    } catch (sendErr) {
+      return res.status(500).json({
+        error: 'Failed to send template message',
+        message: sendErr.message,
+        details: sendErr
+      });
+    }
+    
+    // Detailed analysis of the response
+    const analysis = {
+      full_result: result,
+      result_type: typeof result,
+      result_keys: result ? Object.keys(result) : null,
+      has_messages: !!result?.messages,
+      messages_type: typeof result?.messages,
+      messages_length: result?.messages?.length,
+      messages_content: result?.messages,
+      first_message: result?.messages?.[0],
+      first_message_type: typeof result?.messages?.[0],
+      first_message_keys: result?.messages?.[0] ? Object.keys(result.messages[0]) : null,
+      extracted_id: result?.messages?.[0]?.id,
+      extracted_id_type: typeof result?.messages?.[0]?.id,
+      is_id_truthy: !!result?.messages?.[0]?.id,
+      is_id_null: result?.messages?.[0]?.id === null,
+      is_id_undefined: result?.messages?.[0]?.id === undefined
+    };
+    
+    logger.info(analysis, 'WhatsApp API response detailed analysis');
+    
+    res.json({
+      success: true,
+      message: 'WhatsApp template response analyzed',
+      whatsapp_response: result,
+      analysis,
+      conclusion: {
+        message_sent: !!result,
+        has_message_id: !!result?.messages?.[0]?.id,
+        message_id_value: result?.messages?.[0]?.id,
+        issue_found: !result?.messages?.[0]?.id ? 'WhatsApp API did not return message ID' : 'No issue - message ID exists'
+      }
+    });
+    
+  } catch (err) {
+    logger.error({ err }, 'Debug template response failed');
+    res.status(500).json({ 
+      error: 'Debug failed',
+      message: err.message 
+    });
   }
 });
 
