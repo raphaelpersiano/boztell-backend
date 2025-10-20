@@ -94,7 +94,8 @@ async function processIncomingMessage(io, message, value) {
       wa_message_id,
       timestamp: parseInt(timestamp) * 1000, // Convert to milliseconds
       type,
-      context
+      context,
+      from // Add phone number for auto-reply and other services
     };
     
     logger.info({ 
@@ -165,12 +166,15 @@ async function processIncomingMessage(io, message, value) {
  */
 async function handleTextMessage(io, messageData) {
   try {
+    // Extract phone from room_id (since room_id is UUID, we need to get phone from room data)
+    // For now, we'll get phone from the room service or pass it separately
     const result = await handleIncomingMessage({ io }, {
       room_id: messageData.room_id,
       user_id: messageData.user_id, // null for customer messages
       content_type: 'text',
       content_text: messageData.text.body,
       wa_message_id: messageData.wa_message_id,
+      customer_phone: messageData.from, // Add customer phone for auto-reply
       metadata: { 
         timestamp: messageData.timestamp,
         type: 'text',

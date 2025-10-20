@@ -43,11 +43,16 @@ const upload = multer({
 });
 
 /**
- * Helper function to validate user_id
+ * Helper function to validate user_id - REQUIRED for all outgoing messages
  */
-async function validateUserId(user_id) {
+async function validateUserId(user_id, required = true) {
   try {
-    // If no user_id provided, it's a customer message (null)
+    // user_id is REQUIRED for all outgoing messages (agents/admin send messages)
+    if (!user_id && required) {
+      throw new Error('user_id is required for all outgoing messages. Only agents/admin can send messages.');
+    }
+    
+    // If no user_id provided and not required, it's a customer message (null)
     if (!user_id) {
       return null;
     }
@@ -80,10 +85,16 @@ async function ensureRoomAndGetId(phone, metadata = {}) {
  */
 router.post('/send', async (req, res) => {
   try {
-    const { to, text, type = 'text', user_id, ...options } = req.body;
+    const { to, text, user_id, ...options } = req.body;
     
-    // Validate user_id if provided
-    const validatedUserId = await validateUserId(user_id);
+    // REQUIRED: Validate user_id for all outgoing messages
+    if (!user_id) {
+      return res.status(400).json({ 
+        error: 'user_id is required for all outgoing messages. Only agents/admin can send messages.',
+        required_fields: ['to', 'text', 'user_id']
+      });
+    }
+    const validatedUserId = await validateUserId(user_id, true);
     
     if (!to || !text) {
       return res.status(400).json({ 
@@ -93,6 +104,7 @@ router.post('/send', async (req, res) => {
     
     // Validate phone number
     const cleanPhone = validateWhatsAppPhoneNumber(to);
+    
     // Extract contextual reply if provided
     const ctx = req.body.context;
     let replyTo = options.replyTo || null;
@@ -101,144 +113,72 @@ router.post('/send', async (req, res) => {
       else if (typeof ctx === 'object' && ctx.message_id) replyTo = ctx.message_id;
     }
     
-    // Send message based on type
+    // Ensure room exists (1 room = 1 phone number)
+    const textRoom = await ensureRoom(cleanPhone, { phone: cleanPhone });
+
+    // 1) Send to WhatsApp first to get message ID
     let result;
-    
-    switch (type) {
-      case 'text':
-        // Ensure room exists (1 room = 1 phone number)
-        const textRoom = await ensureRoom(cleanPhone, { phone: cleanPhone });
-
-        // 1) Insert DB row first
-        const messageId = uuidv4();
-        const baseMeta = { direction: 'outgoing', source: 'api', type: 'text' };
-        if (replyTo) baseMeta.reply_to = replyTo;
-        
-        const messageData = {
-          id: messageId,
-          room_id: textRoom.id,
-          user_id: validatedUserId,
-          content_type: 'text',
-          content_text: text,
-          media_type: null,
-          media_id: null,
-          gcs_filename: null,
-          gcs_url: null,
-          file_size: null,
-          mime_type: null,
-          original_filename: null,
-          wa_message_id: null,
-          reply_to_wa_message_id: replyTo || null,
-          metadata: baseMeta,
-          created_at: new Date().toISOString()
-        };
-        
-        try {
-          await insertMessage(messageData);
-        } catch (insertErr) {
-          logger.error({ err: insertErr, messageId, to: cleanPhone }, 'Failed to insert text message to database');
-          throw new Error(`Database insert failed: ${insertErr.message}`);
-        }
-
-        // 2) Send to WhatsApp
-        try {
-          result = await sendTextMessage(cleanPhone, text, { ...options, replyTo });
-        } catch (sendErr) {
-          // Mark failure on the same row and return 500 with message_id for tracking
-          const failMeta = { ...baseMeta, send_error: sendErr.message };
-          try {
-            await updateMessage(messageId, { metadata: failMeta });
-          } catch (_) { /* best effort */ }
-          throw Object.assign(new Error(sendErr.message), { _messageId: messageId });
-        }
-
-        // 3) Update DB row with WA message id
-        const waMessageId = result.messages?.[0]?.id || null;
-        try {
-          await updateMessage(messageId, { wa_message_id: waMessageId });
-        } catch (updErr) {
-          logger.warn({ err: updErr, messageId }, 'Failed to update wa_message_id for text message');
-        }
-
-        logger.info({ to: cleanPhone, type, messageId, waMessageId }, 'Text message persisted and sent');
-
-        return res.json({
-          success: true,
-          to: cleanPhone,
-          type,
-          message_id: messageId,
-          whatsapp_message_id: waMessageId,
-          result
-        });
-        break;
-        
-      case 'template':
-        const { templateName, languageCode = 'en', parameters = [] } = options;
-        if (!templateName) {
-          return res.status(400).json({ error: 'templateName required for template messages' });
-        }
-        
-        // Ensure room exists
-        const templateRoomId = await ensureRoomAndGetId(cleanPhone);
-
-        // Insert DB row first
-        const templateMessageId = uuidv4();
-        const templateMeta = { direction: 'outgoing', source: 'api', type: 'template', templateName, languageCode };
-        
-        const templateMessageData = {
-          id: templateMessageId,
-          room_id: templateRoomId,
-          user_id: validatedUserId,
-          content_type: 'template',
-          content_text: `Template: ${templateName}`,
-          wa_message_id: null,
-          metadata: templateMeta,
-          created_at: new Date().toISOString()
-        };
-        
-        await insertMessage(templateMessageData);
-
-        try {
-          result = await sendTemplateMessage(cleanPhone, templateName, languageCode, parameters);
-        } catch (sendErr) {
-          const failMeta = { ...templateMeta, send_error: sendErr.message };
-          await updateMessage(templateMessageId, { metadata: failMeta });
-          throw Object.assign(new Error(sendErr.message), { _messageId: templateMessageId });
-        }
-
-        const templateWaMessageId = result.messages?.[0]?.id || null;
-        await updateMessage(templateMessageId, { wa_message_id: templateWaMessageId });
-
-        return res.json({
-          success: true,
-          to: cleanPhone,
-          type: 'template',
-          templateName,
-          message_id: templateMessageId,
-          whatsapp_message_id: templateWaMessageId,
-          result
-        });
-        break;
-        
-      default:
-        return res.status(400).json({ error: `Unsupported message type: ${type}` });
+    try {
+      result = await sendTextMessage(cleanPhone, text, { ...options, replyTo });
+    } catch (sendErr) {
+      logger.error({ err: sendErr, to: cleanPhone, text }, 'Failed to send text message to WhatsApp');
+      throw new Error(`WhatsApp send failed: ${sendErr.message}`);
     }
+
+    // 2) Get WhatsApp message ID from response
+    const waMessageId = result.messages?.[0]?.id || null;
     
-    logger.info({ to: cleanPhone, type, messageId: result.messages?.[0]?.id }, 'Message sent to WhatsApp successfully');
-    res.json({ success: true, to: cleanPhone, type, whatsapp_message_id: result.messages?.[0]?.id, result });
+    // 3) Insert to database with WhatsApp message ID already included
+    const messageId = uuidv4();
+    const baseMeta = { direction: 'outgoing', source: 'api', type: 'text' };
+    if (replyTo) baseMeta.reply_to = replyTo;
+    
+    const messageData = {
+      id: messageId,
+      room_id: textRoom.id,
+      user_id: validatedUserId,
+      content_type: 'text',
+      content_text: text,
+      media_type: null,
+      media_id: null,
+      gcs_filename: null,
+      gcs_url: null,
+      file_size: null,
+      mime_type: null,
+      original_filename: null,
+      wa_message_id: waMessageId, // Insert with WhatsApp message ID directly
+      reply_to_wa_message_id: replyTo || null,
+      metadata: baseMeta,
+      created_at: new Date().toISOString()
+    };
+    
+    try {
+      await insertMessage(messageData);
+    } catch (insertErr) {
+      logger.error({ err: insertErr, messageId, waMessageId, to: cleanPhone }, 'Failed to insert text message to database (message already sent to WhatsApp)');
+      // Don't throw error here since WhatsApp message was sent successfully
+    }
+
+    logger.info({ to: cleanPhone, messageId, waMessageId }, 'Text message sent to WhatsApp and saved to database');
+
+    res.json({
+      success: true,
+      to: cleanPhone,
+      type: 'text',
+      message_id: messageId,
+      whatsapp_message_id: waMessageId,
+      result
+    });
     
   } catch (err) {
-    logger.error({ err, body: req.body }, 'Failed to send WhatsApp message');
+    logger.error({ err, body: req.body }, 'Failed to send WhatsApp text message');
     
-    if (err._messageId) {
-      return res.status(500).json({ error: 'Failed to send message', message: err.message, message_id: err._messageId });
-    }
     if (err.message.includes('Invalid phone number')) {
       return res.status(400).json({ error: err.message });
     }
     
     res.status(500).json({ 
-      error: 'Failed to send message',
+      error: 'Failed to send text message',
       message: err.message 
     });
   }
@@ -253,15 +193,33 @@ router.post('/send-contacts', async (req, res) => {
   try {
     const { to, contacts, replyTo, user_id } = req.body;
     
-    // Validate user_id if provided
-    const validatedUserId = await validateUserId(user_id);
+    // REQUIRED: Validate user_id for all outgoing messages
+    if (!user_id) {
+      return res.status(400).json({ 
+        error: 'user_id is required for all outgoing messages. Only agents/admin can send contacts.',
+        required_fields: ['to', 'contacts', 'user_id']
+      });
+    }
+    const validatedUserId = await validateUserId(user_id, true);
     if (!to || !Array.isArray(contacts) || contacts.length === 0) {
       return res.status(400).json({ error: 'to and contacts[] required' });
     }
     const cleanPhone = validateWhatsAppPhoneNumber(to);
     const contactsRoomId = await ensureRoomAndGetId(cleanPhone);
 
-    // Insert DB row first
+    // 1) Send to WhatsApp first to get message ID
+    let result;
+    try {
+      result = await sendContactsMessage(cleanPhone, contacts, { replyTo });
+    } catch (sendErr) {
+      logger.error({ err: sendErr, to: cleanPhone, contacts }, 'Failed to send contacts message to WhatsApp');
+      throw new Error(`WhatsApp send failed: ${sendErr.message}`);
+    }
+
+    // 2) Get WhatsApp message ID from response
+    const waMessageId = result.messages?.[0]?.id || null;
+    
+    // 3) Insert to database with WhatsApp message ID already included
     const messageId = uuidv4();
     const meta = { direction: 'outgoing', source: 'api', type: 'contacts' };
     if (replyTo) meta.reply_to = replyTo;
@@ -279,23 +237,21 @@ router.post('/send-contacts', async (req, res) => {
       file_size: null,
       mime_type: null,
       original_filename: null,
-      wa_message_id: null,
+      wa_message_id: waMessageId, // Insert with WhatsApp message ID directly
       reply_to_wa_message_id: replyTo || null,
       metadata: meta,
       created_at: new Date().toISOString()
     };
     
-    await insertMessage(messageData);
-
-    let result;
     try {
-      result = await sendContactsMessage(cleanPhone, contacts, { replyTo });
-    } catch (err) {
-      await updateMessage(messageId, { metadata: { ...meta, send_error: err.message } });
-      throw Object.assign(new Error(err.message), { _messageId: messageId });
+      await insertMessage(messageData);
+    } catch (insertErr) {
+      logger.error({ err: insertErr, messageId, waMessageId, to: cleanPhone }, 'Failed to insert contacts message to database (message already sent to WhatsApp)');
+      // Don't throw error here since WhatsApp message was sent successfully
     }
-    const waMessageId = result.messages?.[0]?.id || null;
-    await updateMessage(messageId, { wa_message_id: waMessageId });
+
+    logger.info({ to: cleanPhone, messageId, waMessageId, contactsCount: contacts.length }, 'Contacts message sent to WhatsApp and saved to database');
+
     res.json({ success: true, to: cleanPhone, type: 'contacts', message_id: messageId, whatsapp_message_id: waMessageId, result });
   } catch (err) {
     if (err._messageId) return res.status(500).json({ error: 'Failed to send contacts', message: err.message, message_id: err._messageId });
@@ -312,14 +268,33 @@ router.post('/send-location', async (req, res) => {
   try {
     const { to, location, replyTo, user_id } = req.body;
     
-    // Validate user_id if provided
-    const validatedUserId = await validateUserId(user_id);
+    // REQUIRED: Validate user_id for all outgoing messages
+    if (!user_id) {
+      return res.status(400).json({ 
+        error: 'user_id is required for all outgoing messages. Only agents/admin can send location.',
+        required_fields: ['to', 'location', 'user_id']
+      });
+    }
+    const validatedUserId = await validateUserId(user_id, true);
     if (!to || !location || typeof location.latitude !== 'number' || typeof location.longitude !== 'number') {
       return res.status(400).json({ error: 'to and location.latitude/longitude required' });
     }
     const cleanPhone = validateWhatsAppPhoneNumber(to);
     const locationRoomId = await ensureRoomAndGetId(cleanPhone);
 
+    // 1) Send to WhatsApp first to get message ID
+    let result;
+    try {
+      result = await sendLocationMessage(cleanPhone, location, { replyTo });
+    } catch (sendErr) {
+      logger.error({ err: sendErr, to: cleanPhone, location }, 'Failed to send location message to WhatsApp');
+      throw new Error(`WhatsApp send failed: ${sendErr.message}`);
+    }
+
+    // 2) Get WhatsApp message ID from response
+    const waMessageId = result.messages?.[0]?.id || null;
+    
+    // 3) Insert to database with WhatsApp message ID already included
     const messageId = uuidv4();
     const meta = { direction: 'outgoing', source: 'api', type: 'location', location };
     if (replyTo) meta.reply_to = replyTo;
@@ -337,23 +312,21 @@ router.post('/send-location', async (req, res) => {
       file_size: null,
       mime_type: null,
       original_filename: null,
-      wa_message_id: null,
+      wa_message_id: waMessageId, // Insert with WhatsApp message ID directly
       reply_to_wa_message_id: replyTo || null,
       metadata: meta,
       created_at: new Date().toISOString()
     };
     
-    await insertMessage(messageData);
-
-    let result;
     try {
-      result = await sendLocationMessage(cleanPhone, location, { replyTo });
-    } catch (err) {
-      await updateMessage(messageId, { metadata: { ...meta, send_error: err.message } });
-      throw Object.assign(new Error(err.message), { _messageId: messageId });
+      await insertMessage(messageData);
+    } catch (insertErr) {
+      logger.error({ err: insertErr, messageId, waMessageId, to: cleanPhone }, 'Failed to insert location message to database (message already sent to WhatsApp)');
+      // Don't throw error here since WhatsApp message was sent successfully
     }
-    const waMessageId = result.messages?.[0]?.id || null;
-    await updateMessage(messageId, { wa_message_id: waMessageId });
+
+    logger.info({ to: cleanPhone, messageId, waMessageId, location }, 'Location message sent to WhatsApp and saved to database');
+
     res.json({ success: true, to: cleanPhone, type: 'location', message_id: messageId, whatsapp_message_id: waMessageId, result });
   } catch (err) {
     if (err._messageId) return res.status(500).json({ error: 'Failed to send location', message: err.message, message_id: err._messageId });
@@ -370,14 +343,33 @@ router.post('/send-reaction', async (req, res) => {
   try {
     const { to, message_id, emoji, user_id } = req.body;
     
-    // Validate user_id if provided
-    const validatedUserId = await validateUserId(user_id);
+    // REQUIRED: Validate user_id for all outgoing messages
+    if (!user_id) {
+      return res.status(400).json({ 
+        error: 'user_id is required for all outgoing messages. Only agents/admin can send reactions.',
+        required_fields: ['to', 'message_id', 'emoji', 'user_id']
+      });
+    }
+    const validatedUserId = await validateUserId(user_id, true);
     if (!to || !message_id || !emoji) {
       return res.status(400).json({ error: 'to, message_id, and emoji are required' });
     }
     const cleanPhone = validateWhatsAppPhoneNumber(to);
     const reactionRoomId = await ensureRoomAndGetId(cleanPhone);
 
+    // 1) Send to WhatsApp first to get message ID
+    let result;
+    try {
+      result = await sendReactionMessage(cleanPhone, message_id, emoji);
+    } catch (sendErr) {
+      logger.error({ err: sendErr, to: cleanPhone, message_id, emoji }, 'Failed to send reaction message to WhatsApp');
+      throw new Error(`WhatsApp send failed: ${sendErr.message}`);
+    }
+
+    // 2) Get WhatsApp message ID from response
+    const waMessageId = result.messages?.[0]?.id || null;
+    
+    // 3) Insert to database with WhatsApp message ID already included
     const messageId = uuidv4();
     const meta = { direction: 'outgoing', source: 'api', type: 'reaction', reaction: { emoji, message_id } };
     
@@ -394,24 +386,22 @@ router.post('/send-reaction', async (req, res) => {
       file_size: null,
       mime_type: null,
       original_filename: null,
-      wa_message_id: null,
+      wa_message_id: waMessageId, // Insert with WhatsApp message ID directly
       reaction_emoji: emoji,
       reaction_to_wa_message_id: message_id,
       metadata: meta,
       created_at: new Date().toISOString()
     };
     
-    await insertMessage(messageData);
-
-    let result;
     try {
-      result = await sendReactionMessage(cleanPhone, message_id, emoji);
-    } catch (err) {
-      await updateMessage(messageId, { metadata: { ...meta, send_error: err.message } });
-      throw err;
+      await insertMessage(messageData);
+    } catch (insertErr) {
+      logger.error({ err: insertErr, messageId, waMessageId, to: cleanPhone }, 'Failed to insert reaction message to database (message already sent to WhatsApp)');
+      // Don't throw error here since WhatsApp message was sent successfully
     }
-    const waMessageId = result.messages?.[0]?.id || null;
-    await updateMessage(messageId, { wa_message_id: waMessageId });
+
+    logger.info({ to: cleanPhone, messageId, waMessageId, emoji, reactionTo: message_id }, 'Reaction message sent to WhatsApp and saved to database');
+
     res.json({ success: true, to: cleanPhone, type: 'reaction', message_id: messageId, whatsapp_message_id: waMessageId, result });
   } catch (err) {
     res.status(500).json({ error: 'Failed to send reaction', message: err.message });
@@ -424,11 +414,22 @@ router.post('/send-reaction', async (req, res) => {
  */
 router.post('/send-media', async (req, res) => {
   try {
-    const { to, mediaType, mediaId, mediaUrl, caption, filename } = req.body;
+    const { to, mediaType, mediaId, mediaUrl, caption, filename, user_id } = req.body;
+    
+    // REQUIRED: user_id for all outgoing messages
+    if (!user_id) {
+      return res.status(400).json({ 
+        error: 'user_id is required for all outgoing messages. Only agents/admin can send media.',
+        required_fields: ['to', 'mediaType', 'user_id']
+      });
+    }
+    
+    // Validate user_id
+    const validatedUserId = await validateUserId(user_id, true);
     
     if (!to || !mediaType) {
       return res.status(400).json({ 
-        error: 'Missing required fields: to, mediaType' 
+        error: 'Missing required fields: to, mediaType, user_id' 
       });
     }
     
@@ -494,7 +495,15 @@ router.post('/send-media', async (req, res) => {
  */
 router.post('/send-media-file', upload.single('media'), async (req, res) => {
   try {
-    const { to, caption } = req.body;
+    const { to, caption, user_id } = req.body;
+    
+    // REQUIRED: Validate user_id for all outgoing messages
+    if (!user_id) {
+      return res.status(400).json({ 
+        error: 'user_id is required for all outgoing messages. Only agents/admin can send media.',
+        required_fields: ['to', 'media', 'user_id']
+      });
+    }
     
     if (!to) {
       return res.status(400).json({ error: 'Phone number (to) required' });
@@ -503,6 +512,8 @@ router.post('/send-media-file', upload.single('media'), async (req, res) => {
     if (!req.file) {
       return res.status(400).json({ error: 'Media file required' });
     }
+    
+    const validatedUserId = await validateUserId(user_id, true);
     
     const cleanPhone = validateWhatsAppPhoneNumber(to);
     const { buffer, originalname, mimetype } = req.file;
@@ -553,7 +564,7 @@ router.post('/send-media-file', upload.single('media'), async (req, res) => {
         const textMessageData = {
           id: textMessageDbId,
           room_id: textRoomId,
-          user_id: null, // Document caption messages are system messages
+          user_id: validatedUserId, // Use validated user_id, not null
           content_type: 'text',
           content_text: caption.trim(),
           media_type: null,
@@ -652,8 +663,16 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
   try {
     const { to, caption = '', user_id } = req.body;
     
-    // Validate user_id if provided
-    const validatedUserId = await validateUserId(user_id);
+    // REQUIRED: Validate user_id for all outgoing messages
+    if (!user_id) {
+      return res.status(400).json({ 
+        error: 'user_id is required for all outgoing messages. Only agents/admin can send media.',
+        required_fields: ['to', 'media', 'user_id']
+      });
+    }
+    
+    // Validate user_id and other required fields
+    const validatedUserId = await validateUserId(user_id, true);
 
     if (!to) {
       return res.status(400).json({ error: 'Phone number (to) required' });
@@ -741,7 +760,7 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
           const textMessageData = {
             id: textMessageDbId,
             room_id: cleanPhone,
-            user_id: validatedUserId,
+            user_id: validatedUserId, // Use validated user_id, not null
             content_type: 'text',
             content_text: caption.trim(),
             media_type: null,
@@ -1027,28 +1046,41 @@ router.post('/send-template', async (req, res) => {
       user_id
     } = req.body;
     
-    // Validate user_id if provided
-    const validatedUserId = await validateUserId(user_id);
+    // REQUIRED: Validate user_id for template messages (templates can ONLY be sent by agents/admin)
+    if (!user_id) {
+      return res.status(400).json({ 
+        error: 'user_id is REQUIRED for template messages. Only agents/admin can send templates, never customers.',
+        required_fields: ['to', 'templateName', 'languageCode', 'user_id'],
+        note: 'Template messages are business-initiated conversations that can only be sent by your team.'
+      });
+    }
+    
+    // Validate user_id 
+    const validatedUserId = await validateUserId(user_id, true);
     
     if (!to || !templateName || !languageCode) {
       return res.status(400).json({ 
-        error: 'Missing required fields: to, templateName, languageCode',
+        error: 'Missing required fields: to, templateName, languageCode, user_id',
+        note: 'user_id is REQUIRED - only agents/admin can send templates',
         examples: {
           basic: {
             to: '6287879565390',
             templateName: 'hello_world',
-            languageCode: 'en_US'
+            languageCode: 'en_US',
+            user_id: 'agent-001'
           },
           indonesian: {
             to: '6287879565390',
             templateName: 'hello_world',
-            languageCode: 'id_ID'
+            languageCode: 'id_ID',
+            user_id: 'admin-001'
           },
           with_parameters: {
             to: '6287879565390',
             templateName: 'welcome_message',
             languageCode: 'en_US',
-            parameters: ['John Doe', 'Premium Package', '2024']
+            parameters: ['John Doe', 'Premium Package', '2024'],
+            user_id: 'supervisor-001'
           },
           explanation: 'Parameters will replace {{1}}, {{2}}, {{3}} etc. in your template. languageCode must match what you registered in Meta Business Manager.'
         }
@@ -1318,11 +1350,22 @@ router.get('/templates', async (req, res) => {
  */
 router.post('/test-template', async (req, res) => {
   try {
-    const { to, templateName = 'hello_world', languageCode = 'en_US', parameters = [] } = req.body;
+    const { to, templateName = 'hello_world', languageCode = 'en_US', parameters = [], user_id } = req.body;
+    
+    // REQUIRED: user_id for template testing 
+    if (!user_id) {
+      return res.status(400).json({ 
+        error: 'user_id is required for template testing. Only agents/admin can send templates.',
+        required_fields: ['to', 'user_id']
+      });
+    }
     
     if (!to) {
       return res.status(400).json({ error: 'Phone number (to) required' });
     }
+    
+    // Validate user_id
+    const validatedUserId = await validateUserId(user_id, true);
     
     const cleanPhone = validateWhatsAppPhoneNumber(to);
     
@@ -1394,7 +1437,19 @@ router.post('/test-template', async (req, res) => {
  */
 router.post('/test-db', async (req, res) => {
   try {
-    const { to = '6287879565390' } = req.body;
+    const { to = '6287879565390', user_id } = req.body;
+    
+    // REQUIRED: user_id for database test messages
+    if (!user_id) {
+      return res.status(400).json({ 
+        error: 'user_id is required for database test. Only agents/admin can create test messages.',
+        required_fields: ['user_id']
+      });
+    }
+    
+    // Validate user_id
+    const validatedUserId = await validateUserId(user_id, true);
+    
     const cleanPhone = validateWhatsAppPhoneNumber(to);
     
     // Test 1: Room creation
@@ -1406,7 +1461,7 @@ router.post('/test-db', async (req, res) => {
     const testMessageData = {
       id: messageId,
       room_id: testRoomId,
-      user_id: null, // Test message as customer message
+      user_id: validatedUserId, // Use validated user_id instead of null
       content_type: 'text',
       content_text: 'Test message for debugging',
       media_type: null,
@@ -1634,8 +1689,20 @@ router.post('/debug-template-response', async (req, res) => {
       to = '6287879565390', 
       templateName = 'hello_world', 
       languageCode = 'en_US', 
-      parameters = []
+      parameters = [],
+      user_id
     } = req.body;
+    
+    // REQUIRED: user_id for template debugging
+    if (!user_id) {
+      return res.status(400).json({ 
+        error: 'user_id is required for template debugging. Only agents/admin can send templates.',
+        required_fields: ['user_id']
+      });
+    }
+    
+    // Validate user_id
+    const validatedUserId = await validateUserId(user_id, true);
     
     const cleanPhone = validateWhatsAppPhoneNumber(to);
     
@@ -1707,11 +1774,22 @@ router.post('/debug-template-response', async (req, res) => {
  */
 router.post('/test', async (req, res) => {
   try {
-    const { to } = req.body;
+    const { to, user_id } = req.body;
+    
+    // REQUIRED: user_id for test messages
+    if (!user_id) {
+      return res.status(400).json({ 
+        error: 'user_id is required for test messages. Only agents/admin can send test messages.',
+        required_fields: ['to', 'user_id']
+      });
+    }
     
     if (!to) {
       return res.status(400).json({ error: 'Phone number (to) required' });
     }
+    
+    // Validate user_id
+    const validatedUserId = await validateUserId(user_id, true);
     
     const cleanPhone = validateWhatsAppPhoneNumber(to);
     const testMessage = `Hello! This is a test message from Boztell Backend at ${new Date().toLocaleString('id-ID')}. Your phone number: ${cleanPhone}`;

@@ -10,8 +10,7 @@ import { sendAutoReply, markMessageAsRead } from './whatsappService.js';
  * @param {import('socket.io').Server} deps.io - socket.io server
  * @param {object} input - message input
  * @param {string} input.room_id
- * @param {string} input.sender_id
- * @param {string} input.sender
+ * @param {string|null} input.user_id - null for customer messages, user ID for agent messages
  * @param {string} input.content_type - 'text' | 'image' | ...
  * @param {string} input.content_text
  * @param {string} [input.wa_message_id]
@@ -30,8 +29,7 @@ export async function handleIncomingMessage({ io }, input) {
     const messageData = {
       id,
       room_id: input.room_id,
-      sender_id: input.sender_id,
-      sender: input.sender,
+      user_id: input.user_id, // null for customer messages from webhook
       content_type: input.content_type,
       content_text: input.content_text,
       wa_message_id: input.wa_message_id || null,
@@ -48,10 +46,10 @@ export async function handleIncomingMessage({ io }, input) {
     logger.info({ 
       messageId: id,
       roomId: input.room_id,
-      senderId: input.sender_id,
+      userId: input.user_id, // null for customer messages
       contentType: input.content_type,
       waMessageId: input.wa_message_id
-    }, 'Message saved to database');
+    }, 'Incoming message saved to database');
 
     // 3. Emit to socket room for real-time updates
     io.to(`room:${input.room_id}`).emit('room:new_message', {
@@ -78,13 +76,14 @@ export async function handleIncomingMessage({ io }, input) {
       }
     }
 
-    // 6. Send auto-reply if it's a text message
-    if (input.content_type === 'text' && input.content_text) {
+    // 6. Send auto-reply if it's a text message and we have customer phone
+    if (input.content_type === 'text' && input.content_text && input.customer_phone) {
       try {
-        const autoReply = await sendAutoReply(input.sender_id, input.content_text);
+        const autoReply = await sendAutoReply(input.customer_phone, input.content_text);
         if (autoReply) {
           logger.info({ 
             roomId: input.room_id,
+            customerPhone: input.customer_phone,
             replyMessageId: autoReply.messages?.[0]?.id 
           }, 'Auto-reply sent');
         }
@@ -105,7 +104,8 @@ export async function handleIncomingMessage({ io }, input) {
     logger.error({ 
       err, 
       roomId: input.room_id, 
-      senderId: input.sender_id 
+      userId: input.user_id,
+      customerPhone: input.customer_phone
     }, 'Failed to handle incoming message');
     
     throw err;

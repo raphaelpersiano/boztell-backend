@@ -61,8 +61,7 @@ export async function handleIncomingMedia({ io }, input) {
     const message = await saveMediaMessage({
       id: messageId,
       room_id: input.room_id,
-      sender_id: input.sender_id,
-      sender: input.sender,
+      user_id: input.user_id, // null for customer messages from webhook
       media_type: input.media_type,
       media_id: input.media_id,
       caption: input.caption,
@@ -216,8 +215,7 @@ async function saveMediaMessage(data) {
   const messageData = {
     id: data.id,
     room_id: data.room_id,
-    sender_id: data.sender_id,
-    sender: data.sender,
+    user_id: data.user_id, // null for customer messages from webhook
     content_type: 'media',
     content_text: data.caption,
     media_type: data.media_type,
