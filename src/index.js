@@ -19,8 +19,15 @@ import { initializeStorage } from './services/storageService.js';
 
 const app = express();
 
+// CORS configuration - Allow all origins for development
+app.use(cors({
+  origin: '*', // Allow all origins
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+}));
+
 app.use(helmet());
-app.use(cors());
 // Serve uploaded files for development
 app.use('/uploads', express.static('uploads'));
 // Use express.json with a verify function to retain the raw body for signature validation
@@ -95,7 +102,7 @@ app.use('/media', mediaRouter);
 app.use('/messages', messagesRouter);
 app.use('/leads', leadsRouter);
 app.use('/users', usersRouter);
-app.use('/api/auth', authRouter);
+app.use('/auth', authRouter);
 app.use('/rooms', roomsRouter);
 
 // API info endpoint
@@ -118,7 +125,7 @@ app.get('/api', (req, res) => {
       media: '/media/upload',
       messages: '/messages/send',
       rooms: '/rooms',
-      auth: '/api/auth/login',
+      auth: '/auth/login',
       health: '/health'
     }
   });

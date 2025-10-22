@@ -114,13 +114,14 @@ async function processIncomingMessage(io, message, value) {
       case 'audio':
       case 'document':
       case 'sticker':
-  return await handleMediaMessage(io, { ...baseMessage, media: message[type] });
+        return await handleMediaMessage(io, { ...baseMessage, media: message[type] });
         
       case 'location':
         return await handleLocationMessage(io, { ...baseMessage, location: message.location });
         
       case 'contacts':
         return await handleContactsMessage(io, { ...baseMessage, contacts: message.contacts });
+        
       case 'reaction':
         return await handleReactionMessage(io, { ...baseMessage, reaction: message.reaction });
         
@@ -138,6 +139,14 @@ async function processIncomingMessage(io, message, value) {
         
       case 'referral':
         return await handleReferralMessage(io, { ...baseMessage, referral: message.referral });
+        
+      case 'unsupported':
+        // WhatsApp sends unsupported type for messages it can't process
+        return await handleUnsupportedMessage(io, { ...baseMessage, unsupported: message.unsupported });
+        
+      case 'request_welcome':
+        // Customer clicked "Get Started" button
+        return await handleRequestWelcome(io, baseMessage);
         
       default:
         logger.warn({ type, message }, 'Unknown message type received');
@@ -166,19 +175,18 @@ async function processIncomingMessage(io, message, value) {
  */
 async function handleTextMessage(io, messageData) {
   try {
-    // Extract phone from room_id (since room_id is UUID, we need to get phone from room data)
-    // For now, we'll get phone from the room service or pass it separately
     const result = await handleIncomingMessage({ io }, {
       room_id: messageData.room_id,
-      user_id: messageData.user_id, // null for customer messages
+      user_id: null, // null = customer message (incoming)
       content_type: 'text',
       content_text: messageData.text.body,
       wa_message_id: messageData.wa_message_id,
+      status: 'received',
       customer_phone: messageData.from, // Add customer phone for auto-reply
+      reply_to_wa_message_id: messageData.context?.id || null,
       metadata: { 
         timestamp: messageData.timestamp,
-        type: 'text',
-        reply_to: messageData.context?.id || null
+        type: 'text'
       }
     });
     
@@ -210,15 +218,21 @@ async function handleMediaMessage(io, messageData) {
   
   return await handleIncomingMedia({ io }, {
     room_id: messageData.room_id,
-    user_id: messageData.user_id, // null for customer messages
+    user_id: null, // null = customer message (incoming)
+    content_type: 'media',
+    content_text: media.caption || '',
     media_type: type,
     media_id: media.id,
-    caption: media.caption || '',
-    filename: media.filename || null,
     mime_type: media.mime_type || null,
-    sha256: media.sha256 || null,
+    original_filename: media.filename || null,
+    file_size: null, // Will be updated after download
     wa_message_id: messageData.wa_message_id,
-    metadata: { timestamp: messageData.timestamp, reply_to: messageData.context?.id || null }
+    status: 'received',
+    reply_to_wa_message_id: messageData.context?.id || null,
+    metadata: { 
+      timestamp: messageData.timestamp,
+      sha256: media.sha256 || null
+    }
   });
 }
 
@@ -230,19 +244,20 @@ async function handleLocationMessage(io, messageData) {
   
   return await handleIncomingMessage({ io }, {
     room_id: messageData.room_id,
-    user_id: messageData.user_id, // null for customer messages
+    user_id: null, // null = customer message (incoming)
     content_type: 'location',
-    content_text: `Location: ${location.latitude}, ${location.longitude}`,
+    content_text: `${location.name || 'Location'}: ${location.latitude}, ${location.longitude}`,
     wa_message_id: messageData.wa_message_id,
+    status: 'received',
+    reply_to_wa_message_id: messageData.context?.id || null,
     metadata: {
-  timestamp: messageData.timestamp,
+      timestamp: messageData.timestamp,
       location: {
         latitude: location.latitude,
         longitude: location.longitude,
         name: location.name,
         address: location.address
-  },
-  reply_to: messageData.context?.id || null
+      }
     }
   });
 }
@@ -256,14 +271,15 @@ async function handleContactsMessage(io, messageData) {
   
   return await handleIncomingMessage({ io }, {
     room_id: messageData.room_id,
-    user_id: messageData.user_id, // null for customer messages
+    user_id: null, // null = customer message (incoming)
     content_type: 'contacts',
     content_text: `Shared contacts: ${contactsList}`,
     wa_message_id: messageData.wa_message_id,
+    status: 'received',
+    reply_to_wa_message_id: messageData.context?.id || null,
     metadata: {
-  timestamp: messageData.timestamp,
-  contacts,
-  reply_to: messageData.context?.id || null
+      timestamp: messageData.timestamp,
+      contacts
     }
   });
 }
@@ -273,16 +289,18 @@ async function handleContactsMessage(io, messageData) {
  */
 async function handleReactionMessage(io, messageData) {
   const { reaction } = messageData;
-  const text = `Reaction ${reaction.emoji} to ${reaction.message_id}`;
+  
   return await handleIncomingMessage({ io }, {
     room_id: messageData.room_id,
-    user_id: messageData.user_id, // null for customer messages
+    user_id: null, // null = customer message (incoming)
     content_type: 'reaction',
-    content_text: text,
+    content_text: `Reacted ${reaction.emoji} to message`,
     wa_message_id: messageData.wa_message_id,
+    status: 'received',
+    reaction_emoji: reaction.emoji,
+    reaction_to_wa_message_id: reaction.message_id,
     metadata: {
-      timestamp: messageData.timestamp,
-      reaction
+      timestamp: messageData.timestamp
     }
   });
 }
@@ -313,14 +331,15 @@ async function handleInteractiveMessage(io, messageData) {
   
   return await handleIncomingMessage({ io }, {
     room_id: messageData.room_id,
-    user_id: messageData.user_id, // null for customer messages
+    user_id: null, // null = customer message (incoming)
     content_type: 'interactive',
     content_text: responseText,
     wa_message_id: messageData.wa_message_id,
+    status: 'received',
+    reply_to_wa_message_id: messageData.context?.id || null,
     metadata: {
-  timestamp: messageData.timestamp,
-  interactive: responseData,
-  reply_to: messageData.context?.id || null
+      timestamp: messageData.timestamp,
+      interactive: responseData
     }
   });
 }
@@ -333,14 +352,15 @@ async function handleButtonMessage(io, messageData) {
   
   return await handleIncomingMessage({ io }, {
     room_id: messageData.room_id,
-    user_id: messageData.user_id, // null for customer messages
+    user_id: null, // null = customer message (incoming)
     content_type: 'button',
     content_text: `Button: ${button.text}`,
     wa_message_id: messageData.wa_message_id,
+    status: 'received',
+    reply_to_wa_message_id: messageData.context?.id || null,
     metadata: {
-  timestamp: messageData.timestamp,
-  button,
-  reply_to: messageData.context?.id || null
+      timestamp: messageData.timestamp,
+      button
     }
   });
 }
@@ -353,14 +373,15 @@ async function handleOrderMessage(io, messageData) {
   
   return await handleIncomingMessage({ io }, {
     room_id: messageData.room_id,
-    user_id: messageData.user_id, // null for customer messages
+    user_id: null, // null = customer message (incoming)
     content_type: 'order',
     content_text: `Order placed with ${order.product_items?.length || 0} items`,
     wa_message_id: messageData.wa_message_id,
+    status: 'received',
+    reply_to_wa_message_id: messageData.context?.id || null,
     metadata: {
-  timestamp: messageData.timestamp,
-  order,
-  reply_to: messageData.context?.id || null
+      timestamp: messageData.timestamp,
+      order
     }
   });
 }
@@ -373,16 +394,70 @@ async function handleReferralMessage(io, messageData) {
   
   return await handleIncomingMessage({ io }, {
     room_id: messageData.room_id,
-    user_id: messageData.user_id, // null for customer messages
+    user_id: null, // null = customer message (incoming)
     content_type: 'referral',
     content_text: `Referral from ${referral.source_type}: ${referral.source_id}`,
     wa_message_id: messageData.wa_message_id,
+    status: 'received',
+    reply_to_wa_message_id: messageData.context?.id || null,
     metadata: {
-  timestamp: messageData.timestamp,
-  referral,
-  reply_to: messageData.context?.id || null
+      timestamp: messageData.timestamp,
+      referral
     }
   });
 }
 
+/**
+ * Handle unsupported message types
+ */
+async function handleUnsupportedMessage(io, messageData) {
+  const { unsupported } = messageData;
+  
+  return await handleIncomingMessage({ io }, {
+    room_id: messageData.room_id,
+    user_id: null, // null = customer message (incoming)
+    content_type: 'unsupported',
+    content_text: '[Unsupported Message Type]',
+    wa_message_id: messageData.wa_message_id,
+    status: 'received',
+    reply_to_wa_message_id: messageData.context?.id || null,
+    metadata: {
+      timestamp: messageData.timestamp,
+      unsupported
+    }
+  });
+}
 
+/**
+ * Handle request_welcome (Customer clicked "Get Started" button)
+ */
+async function handleRequestWelcome(io, messageData) {
+  return await handleIncomingMessage({ io }, {
+    room_id: messageData.room_id,
+    user_id: null, // null = customer message (incoming)
+    content_type: 'system',
+    content_text: '[Customer clicked Get Started]',
+    wa_message_id: messageData.wa_message_id,
+    status: 'received',
+    reply_to_wa_message_id: null,
+    metadata: {
+      timestamp: messageData.timestamp,
+      type: 'request_welcome'
+    }
+  });
+}
+
+export {
+  processIncomingMessage,
+  handleTextMessage,
+  handleMediaMessage,
+  handleLocationMessage,
+  handleContactsMessage,
+  handleReactionMessage,
+  handleInteractiveMessage,
+  handleButtonMessage,
+  handleOrderMessage,
+  handleReferralMessage,
+  handleUnsupportedMessage,
+  handleRequestWelcome
+};

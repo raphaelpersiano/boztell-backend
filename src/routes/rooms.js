@@ -1,66 +1,28 @@
 import express from 'express';
 import { getRoomsByUser, getAllRoomsWithDetails } from '../db.js';
 import { logger } from '../utils/logger.js';
-import { authenticateUser } from '../middleware/auth.js';
 
 const router = express.Router();
 
 /**
- * Get rooms for the authenticated user
- * - Admin/Supervisor: Get all rooms
- * - Agent: Get only assigned rooms via room_participants
+ * Get all rooms
+ * Returns all rooms with details
  */
-router.get('/', authenticateUser, async (req, res) => {
+router.get('/', async (req, res) => {
   try {
-    const { user } = req;
+    // Get all rooms for now (no role-based filtering)
+    const result = await getAllRoomsWithDetails();
+    const rooms = result.rows;
     
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        error: 'User not authenticated'
-      });
-    }
-
-    let rooms = [];
-    let result;
-
-    // Check user role
-    if (user.role === 'admin' || user.role === 'supervisor') {
-      // Admin and supervisor can see all rooms
-      result = await getAllRoomsWithDetails();
-      rooms = result.rows;
-      
-      logger.info(`Admin/Supervisor ${user.id} accessed all rooms`, {
-        userId: user.id,
-        role: user.role,
-        roomCount: result.rowCount
-      });
-    } else if (user.role === 'agent') {
-      // Agents only see assigned rooms
-      result = await getRoomsByUser(user.id);
-      rooms = result.rows;
-      
-      logger.info(`Agent ${user.id} accessed assigned rooms`, {
-        userId: user.id,
-        role: user.role,
-        roomCount: result.rowCount
-      });
-    } else {
-      return res.status(403).json({
-        success: false,
-        error: 'Invalid user role'
-      });
-    }
-
-    // Response sudah dalam format yang benar dari database functions
-    const transformedRooms = rooms;
+    logger.info('Accessed all rooms', {
+      roomCount: result.rowCount
+    });
 
     res.json({
       success: true,
       data: {
-        rooms: transformedRooms,
-        total_count: result.rowCount,
-        user_role: user.role
+        rooms: rooms,
+        total_count: result.rowCount
       }
     });
 
@@ -75,37 +37,11 @@ router.get('/', authenticateUser, async (req, res) => {
 });
 
 /**
- * Get specific room details (for both admin and assigned agents)
+ * Get specific room details
  */
-router.get('/:roomId', authenticateUser, async (req, res) => {
+router.get('/:roomId', async (req, res) => {
   try {
-    const { user } = req;
     const { roomId } = req.params;
-
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        error: 'User not authenticated'
-      });
-    }
-
-    let hasAccess = false;
-
-    // Check access permissions
-    if (user.role === 'admin' || user.role === 'supervisor') {
-      hasAccess = true;
-    } else if (user.role === 'agent') {
-      // Check if agent is assigned to this room
-      const userRooms = await getRoomsByUser(user.id);
-      hasAccess = userRooms.rows.some(room => room.room_id === roomId);
-    }
-
-    if (!hasAccess) {
-      return res.status(403).json({
-        success: false,
-        error: 'Access denied to this room'
-      });
-    }
 
     // Get room details
     const allRooms = await getAllRoomsWithDetails();
@@ -153,22 +89,12 @@ router.get('/:roomId', authenticateUser, async (req, res) => {
 });
 
 /**
- * Assign agent to room (add room participant)
- * Only admin/supervisor can assign agents to rooms
+ * Assign user to room (add room participant)
  */
-router.post('/:roomId/assign', authenticateUser, async (req, res) => {
+router.post('/:roomId/assign', async (req, res) => {
   try {
-    const { user } = req;
     const { roomId } = req.params;
     const { user_id } = req.body;
-
-    // Only admin/supervisor can assign agents
-    if (user.role !== 'admin' && user.role !== 'supervisor') {
-      return res.status(403).json({
-        success: false,
-        error: 'Access denied. Only admin/supervisor can assign agents to rooms.'
-      });
-    }
 
     if (!user_id) {
       return res.status(400).json({ 
@@ -223,7 +149,6 @@ router.post('/:roomId/assign', authenticateUser, async (req, res) => {
       user_id, 
       user_name: targetUser.name,
       user_role: targetUser.role,
-      assigned_by: user.id,
       action: 'room_assignment' 
     }, 'User assigned to room successfully');
 
@@ -236,8 +161,7 @@ router.post('/:roomId/assign', authenticateUser, async (req, res) => {
         user_name: targetUser.name,
         user_email: targetUser.email,
         user_role: targetUser.role,
-        joined_at: participantData.joined_at,
-        assigned_by: user.id
+        joined_at: participantData.joined_at
       }
     });
   } catch (error) {
@@ -248,20 +172,10 @@ router.post('/:roomId/assign', authenticateUser, async (req, res) => {
 
 /**
  * Unassign user from room (remove room participant by user_id)
- * Only admin/supervisor can unassign users from rooms
  */
-router.delete('/:roomId/assign/:userId', authenticateUser, async (req, res) => {
+router.delete('/:roomId/assign/:userId', async (req, res) => {
   try {
-    const { user } = req;
     const { roomId, userId } = req.params;
-
-    // Only admin/supervisor can unassign users
-    if (user.role !== 'admin' && user.role !== 'supervisor') {
-      return res.status(403).json({
-        success: false,
-        error: 'Access denied. Only admin/supervisor can unassign users from rooms.'
-      });
-    }
 
     // Import room functions
     const { getRoomById, removeRoomParticipant } = await import('../db.js');
@@ -287,7 +201,6 @@ router.delete('/:roomId/assign/:userId', authenticateUser, async (req, res) => {
     logger.info({ 
       room_id: roomId, 
       user_id: userId,
-      unassigned_by: user.id,
       action: 'room_unassignment' 
     }, 'User unassigned from room successfully');
 
@@ -296,8 +209,7 @@ router.delete('/:roomId/assign/:userId', authenticateUser, async (req, res) => {
       message: 'User unassigned from room successfully',
       data: {
         room_id: roomId,
-        user_id: userId,
-        unassigned_by: user.id
+        user_id: userId
       }
     });
   } catch (error) {
@@ -308,20 +220,10 @@ router.delete('/:roomId/assign/:userId', authenticateUser, async (req, res) => {
 
 /**
  * Remove room participant by participant ID
- * Only admin/supervisor can remove participants
  */
-router.delete('/participants/:participantId', authenticateUser, async (req, res) => {
+router.delete('/participants/:participantId', async (req, res) => {
   try {
-    const { user } = req;
     const { participantId } = req.params;
-
-    // Only admin/supervisor can remove participants
-    if (user.role !== 'admin' && user.role !== 'supervisor') {
-      return res.status(403).json({
-        success: false,
-        error: 'Access denied. Only admin/supervisor can remove room participants.'
-      });
-    }
 
     // Import room functions
     const { removeRoomParticipantById } = await import('../db.js');
@@ -339,7 +241,6 @@ router.delete('/participants/:participantId', authenticateUser, async (req, res)
 
     logger.info({ 
       participant_id: participantId,
-      removed_by: user.id,
       action: 'participant_removal' 
     }, 'Room participant removed successfully');
 
@@ -348,7 +249,6 @@ router.delete('/participants/:participantId', authenticateUser, async (req, res)
       message: 'Room participant removed successfully',
       data: {
         participant_id: participantId,
-        removed_by: user.id,
         removed_participant: result.rows[0]
       }
     });
@@ -359,28 +259,11 @@ router.delete('/participants/:participantId', authenticateUser, async (req, res)
 });
 
 /**
- * Get room participants (agents assigned to room)
+ * Get room participants
  */
-router.get('/:roomId/participants', authenticateUser, async (req, res) => {
+router.get('/:roomId/participants', async (req, res) => {
   try {
-    const { user } = req;
     const { roomId } = req.params;
-
-    // Check access (admin/supervisor or assigned agent)
-    let hasAccess = false;
-    if (user.role === 'admin' || user.role === 'supervisor') {
-      hasAccess = true;
-    } else if (user.role === 'agent') {
-      const userRooms = await getRoomsByUser(user.id);
-      hasAccess = userRooms.rows.some(room => room.room_id === roomId);
-    }
-
-    if (!hasAccess) {
-      return res.status(403).json({
-        success: false,
-        error: 'Access denied to this room'
-      });
-    }
 
     // Import room functions
     const { getRoomById, getRoomParticipantsWithUsers } = await import('../db.js');
