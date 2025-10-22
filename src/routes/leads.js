@@ -1,5 +1,5 @@
 import express from 'express';
-import { getLeads, getLeadsCount, getLeadById, insertLead, updateLead, deleteLead, getLeadsStats } from '../db.js';
+import { getLeads, getLeadsCount, getLeadById, insertLead, updateLead, deleteLead, getLeadsStats, getLeadsByUserId } from '../db.js';
 import { logger } from '../utils/logger.js';
 
 const router = express.Router();
@@ -8,8 +8,10 @@ const router = express.Router();
 router.get('/', async (req, res) => {
   try {
     const { 
-      status, 
-      agent_id, 
+      leads_status,
+      contact_status,
+      loan_type,
+      utm_id,
       search, 
       page = 1, 
       limit = 50 
@@ -18,8 +20,10 @@ router.get('/', async (req, res) => {
     const offset = (parseInt(page) - 1) * parseInt(limit);
     
     const filters = {
-      status,
-      agent_id,
+      leads_status,
+      contact_status,
+      loan_type,
+      utm_id,
       search,
       limit: parseInt(limit),
       offset
@@ -67,32 +71,30 @@ router.get('/:id', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const {
-      nama_lengkap,
-      nomor_telpon,
-      nominal_pinjaman,
-      jenis_utang,
+      utm_id,
+      name,
+      phone,
+      outstanding,
+      loan_type,
       leads_status = 'cold',
-      assigned_agent_id,
-      notes,
-      metadata = {}
+      contact_status = 'uncontacted'
     } = req.body;
 
-    if (!nama_lengkap || !nomor_telpon || !jenis_utang) {
+    if (!name || !phone || !loan_type) {
       return res.status(400).json({
         success: false,
-        error: 'Missing required fields: nama_lengkap, nomor_telpon, jenis_utang'
+        error: 'Missing required fields: name, phone, loan_type'
       });
     }
 
     const leadData = {
-      nama_lengkap,
-      nomor_telpon,
-      nominal_pinjaman: nominal_pinjaman || 0,
-      jenis_utang,
+      utm_id: utm_id || null,
+      name,
+      phone,
+      outstanding: outstanding || 0,
+      loan_type,
       leads_status,
-      assigned_agent_id: assigned_agent_id || null,
-      notes: notes || null,
-      metadata
+      contact_status
     };
 
     const { rows } = await insertLead(leadData);
@@ -109,26 +111,24 @@ router.put('/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const {
-      nama_lengkap,
-      nomor_telpon,
-      nominal_pinjaman,
-      jenis_utang,
+      utm_id,
+      name,
+      phone,
+      outstanding,
+      loan_type,
       leads_status,
-      assigned_agent_id,
-      notes,
-      metadata
+      contact_status
     } = req.body;
 
     // Build updates object with only non-null values
     const updates = {};
-    if (nama_lengkap !== undefined) updates.nama_lengkap = nama_lengkap;
-    if (nomor_telpon !== undefined) updates.nomor_telpon = nomor_telpon;
-    if (nominal_pinjaman !== undefined) updates.nominal_pinjaman = nominal_pinjaman;
-    if (jenis_utang !== undefined) updates.jenis_utang = jenis_utang;
+    if (utm_id !== undefined) updates.utm_id = utm_id;
+    if (name !== undefined) updates.name = name;
+    if (phone !== undefined) updates.phone = phone;
+    if (outstanding !== undefined) updates.outstanding = outstanding;
+    if (loan_type !== undefined) updates.loan_type = loan_type;
     if (leads_status !== undefined) updates.leads_status = leads_status;
-    if (assigned_agent_id !== undefined) updates.assigned_agent_id = assigned_agent_id;
-    if (notes !== undefined) updates.notes = notes;
-    if (metadata !== undefined) updates.metadata = metadata;
+    if (contact_status !== undefined) updates.contact_status = contact_status;
 
     const { rows } = await updateLead(id, updates);
 
@@ -161,19 +161,22 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
-// Assign lead to agent
-router.post('/:id/assign', async (req, res) => {
+// Update lead contact status
+router.patch('/:id/contact-status', async (req, res) => {
   try {
     const { id } = req.params;
-    const { agent_id, agent_name } = req.body;
+    const { contact_status } = req.body;
 
-    if (!agent_id) {
-      return res.status(400).json({ success: false, error: 'agent_id is required' });
+    if (!contact_status) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'contact_status is required',
+        valid_values: ['uncontacted', 'contacted']
+      });
     }
 
     const updates = {
-      assigned_agent_id: agent_id,
-      assigned_agent_name: agent_name
+      contact_status
     };
 
     const { rows } = await updateLead(id, updates);
@@ -184,8 +187,8 @@ router.post('/:id/assign', async (req, res) => {
 
     res.json({ success: true, data: rows[0] });
   } catch (error) {
-    logger.error({ error }, 'Failed to assign lead');
-    res.status(500).json({ success: false, error: 'Failed to assign lead' });
+    logger.error({ error }, 'Failed to update lead contact status');
+    res.status(500).json({ success: false, error: 'Failed to update lead contact status' });
   }
 });
 
@@ -198,6 +201,178 @@ router.get('/stats/overview', async (req, res) => {
   } catch (error) {
     logger.error({ error }, 'Failed to get leads stats');
     res.status(500).json({ success: false, error: 'Failed to get leads stats' });
+  }
+});
+
+// Get leads assigned to specific user (via room participants)
+router.get('/user/:user_id', async (req, res) => {
+  try {
+    const { user_id } = req.params;
+    
+    if (!user_id) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'user_id is required' 
+      });
+    }
+
+    const { rows } = await getLeadsByUserId(user_id);
+
+    res.json({ 
+      success: true, 
+      data: rows,
+      total: rows.length,
+      user_id,
+      message: rows.length === 0 ? 'No leads found for this user' : `Found ${rows.length} leads for user`
+    });
+  } catch (error) {
+    logger.error({ error, user_id: req.params.user_id }, 'Failed to get leads by user ID');
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to get leads by user ID',
+      details: error.message
+    });
+  }
+});
+
+// Get leads by phone number
+router.get('/phone/:phone', async (req, res) => {
+  try {
+    const { phone } = req.params;
+    
+    if (!phone) {
+      return res.status(400).json({ success: false, error: 'Phone number is required' });
+    }
+
+    // Clean phone number (remove non-digits)
+    const cleanPhone = phone.replace(/\D/g, '');
+    
+    const { rows } = await getLeads({ phone: cleanPhone });
+
+    if (rows.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Lead not found with this phone number',
+        phone: cleanPhone
+      });
+    }
+
+    res.json({ success: true, data: rows[0] });
+  } catch (error) {
+    logger.error({ error }, 'Failed to get lead by phone');
+    res.status(500).json({ success: false, error: 'Failed to get lead by phone' });
+  }
+});
+
+// Update lead status
+router.patch('/:id/status', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { leads_status } = req.body;
+
+    const validStatuses = ['cold', 'warm', 'hot', 'paid', 'service', 'repayment', 'advocate'];
+
+    if (!leads_status) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'leads_status is required',
+        valid_values: validStatuses
+      });
+    }
+
+    if (!validStatuses.includes(leads_status)) {
+      return res.status(400).json({ 
+        success: false, 
+        error: `Invalid leads_status: ${leads_status}`,
+        valid_values: validStatuses
+      });
+    }
+
+    const updates = { leads_status };
+    const { rows } = await updateLead(id, updates);
+
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Lead not found' });
+    }
+
+    res.json({ success: true, data: rows[0] });
+  } catch (error) {
+    logger.error({ error }, 'Failed to update lead status');
+    res.status(500).json({ success: false, error: 'Failed to update lead status' });
+  }
+});
+
+// Get leads by UTM tracking
+router.get('/utm/:utm_id', async (req, res) => {
+  try {
+    const { utm_id } = req.params;
+    
+    const { rows } = await getLeads({ utm_id });
+
+    res.json({ 
+      success: true, 
+      data: rows,
+      total: rows.length,
+      utm_id 
+    });
+  } catch (error) {
+    logger.error({ error }, 'Failed to get leads by UTM');
+    res.status(500).json({ success: false, error: 'Failed to get leads by UTM' });
+  }
+});
+
+// Bulk update leads
+router.patch('/bulk', async (req, res) => {
+  try {
+    const { lead_ids, updates } = req.body;
+
+    if (!lead_ids || !Array.isArray(lead_ids) || lead_ids.length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'lead_ids array is required' 
+      });
+    }
+
+    if (!updates || Object.keys(updates).length === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'updates object is required' 
+      });
+    }
+
+    // Validate update fields
+    const allowedFields = ['utm_id', 'name', 'phone', 'outstanding', 'loan_type', 'leads_status', 'contact_status'];
+    const invalidFields = Object.keys(updates).filter(field => !allowedFields.includes(field));
+    
+    if (invalidFields.length > 0) {
+      return res.status(400).json({ 
+        success: false, 
+        error: `Invalid fields: ${invalidFields.join(', ')}`,
+        allowed_fields: allowedFields
+      });
+    }
+
+    const results = [];
+    for (const leadId of lead_ids) {
+      try {
+        const { rows } = await updateLead(leadId, updates);
+        if (rows.length > 0) {
+          results.push(rows[0]);
+        }
+      } catch (error) {
+        logger.error({ error, leadId }, 'Failed to update individual lead in bulk operation');
+      }
+    }
+
+    res.json({ 
+      success: true, 
+      data: results,
+      updated: results.length,
+      requested: lead_ids.length
+    });
+  } catch (error) {
+    logger.error({ error }, 'Failed to bulk update leads');
+    res.status(500).json({ success: false, error: 'Failed to bulk update leads' });
   }
 });
 

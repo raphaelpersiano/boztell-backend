@@ -4,6 +4,7 @@ import { logger } from '../utils/logger.js';
 
 /**
  * Ensure room exists in database, create if not exists
+ * Auto-creates lead if phone number doesn't exist in leads table
  * @param {string} phone - Customer phone number
  * @param {object} metadata - Optional room metadata (leads_id, title, etc.)
  * @returns {object} Room data
@@ -18,9 +19,51 @@ export async function ensureRoom(phone, metadata = {}) {
       return existingResult.rows[0];
     }
     
+    // Check if lead exists for this phone number, create if not exists
+    let leadsId = metadata.leads_id || null;
+    
+    if (!leadsId) {
+      try {
+        // Import leads functions
+        const { getLeads, insertLead } = await import('../db.js');
+        
+        // Check if lead exists by phone
+        const existingLeadResult = await getLeads({ phone: phone });
+        
+        if (existingLeadResult && existingLeadResult.rows && existingLeadResult.rows.length > 0) {
+          // Lead exists, use existing lead ID
+          leadsId = existingLeadResult.rows[0].id;
+          logger.debug({ phone, leadsId }, 'Using existing lead for room');
+        } else {
+          // Create new lead for this phone number
+          const leadData = {
+            name: metadata.customer_name || `Customer ${phone}`,
+            phone: phone,
+            outstanding: 0,
+            loan_type: metadata.loan_type || 'personal_loan',
+            leads_status: 'cold',
+            contact_status: 'contacted' // Since they're contacting via WhatsApp
+          };
+          
+          const newLeadResult = await insertLead(leadData);
+          
+          if (newLeadResult && newLeadResult.rows && newLeadResult.rows.length > 0) {
+            leadsId = newLeadResult.rows[0].id;
+            logger.info({ 
+              phone, 
+              leadsId, 
+              leadData 
+            }, 'New lead created automatically for room');
+          }
+        }
+      } catch (leadErr) {
+        logger.warn({ err: leadErr, phone }, 'Failed to ensure lead exists, proceeding without leads_id');
+        // Continue without leads_id - room can exist without lead relationship
+      }
+    }
+    
     // Create new room with UUID id
-    const roomTitle = metadata.title || 'Personal';
-    const leadsId = metadata.leads_id || null;
+    const roomTitle = metadata.title || (metadata.customer_name || 'Personal');
     
     const roomData = {
       id: uuidv4(), // Generate UUID for room ID
@@ -43,8 +86,9 @@ export async function ensureRoom(phone, metadata = {}) {
       roomId: newRoom.id,
       phone,
       roomTitle,
-      leadsId 
-    }, 'New room created successfully');
+      leadsId,
+      autoCreatedLead: !metadata.leads_id && leadsId
+    }, 'New room created successfully with lead relationship');
     
     return newRoom;
     

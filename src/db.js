@@ -464,7 +464,7 @@ export async function getAllRoomsWithDetails() {
   return { rows: transformedData, rowCount: transformedData.length };
 }
 
-// Helper functions for participants and devices
+// Helper functions for participants and devices (for FCM notifications)
 export async function getRoomParticipants(roomId) {
   if (!supabase) {
     throw new Error('Supabase client not initialized');
@@ -698,22 +698,31 @@ export async function getLeads(filters = {}) {
   
   let query = supabase
     .from('leads')
-    .select(`
-      *,
-      users:assigned_agent_id(name)
-    `);
+    .select('*');
     
   // Apply filters
-  if (filters.status) {
-    query = query.eq('leads_status', filters.status);
+  if (filters.leads_status) {
+    query = query.eq('leads_status', filters.leads_status);
   }
   
-  if (filters.agent_id) {
-    query = query.eq('assigned_agent_id', filters.agent_id);
+  if (filters.contact_status) {
+    query = query.eq('contact_status', filters.contact_status);
+  }
+  
+  if (filters.loan_type) {
+    query = query.eq('loan_type', filters.loan_type);
+  }
+  
+  if (filters.utm_id) {
+    query = query.eq('utm_id', filters.utm_id);
+  }
+  
+  if (filters.phone) {
+    query = query.eq('phone', filters.phone);
   }
   
   if (filters.search) {
-    query = query.or(`nama_lengkap.ilike.%${filters.search}%,nomor_telpon.ilike.%${filters.search}%`);
+    query = query.or(`name.ilike.%${filters.search}%,phone.ilike.%${filters.search}%`);
   }
   
   // Apply ordering
@@ -734,13 +743,7 @@ export async function getLeads(filters = {}) {
     throw new Error(`Get leads failed: ${error.message}`);
   }
   
-  // Transform data to match original structure
-  const transformedData = data?.map(lead => ({
-    ...lead,
-    assigned_agent_name: lead.users?.name || null
-  })) || [];
-  
-  return { rows: transformedData, rowCount: transformedData.length, totalCount: count };
+  return { rows: data || [], rowCount: data?.length || 0, totalCount: count };
 }
 
 export async function getLeadsCount(filters = {}) {
@@ -753,16 +756,28 @@ export async function getLeadsCount(filters = {}) {
     .select('*', { count: 'exact', head: true });
     
   // Apply same filters as getLeads
-  if (filters.status) {
-    query = query.eq('leads_status', filters.status);
+  if (filters.leads_status) {
+    query = query.eq('leads_status', filters.leads_status);
   }
   
-  if (filters.agent_id) {
-    query = query.eq('assigned_agent_id', filters.agent_id);
+  if (filters.contact_status) {
+    query = query.eq('contact_status', filters.contact_status);
+  }
+  
+  if (filters.loan_type) {
+    query = query.eq('loan_type', filters.loan_type);
+  }
+  
+  if (filters.utm_id) {
+    query = query.eq('utm_id', filters.utm_id);
+  }
+  
+  if (filters.phone) {
+    query = query.eq('phone', filters.phone);
   }
   
   if (filters.search) {
-    query = query.or(`nama_lengkap.ilike.%${filters.search}%,nomor_telpon.ilike.%${filters.search}%`);
+    query = query.or(`name.ilike.%${filters.search}%,phone.ilike.%${filters.search}%`);
   }
   
   const { count, error } = await query;
@@ -781,10 +796,7 @@ export async function getLeadById(id) {
   
   const { data, error } = await supabase
     .from('leads')
-    .select(`
-      *,
-      users:assigned_agent_id(name)
-    `)
+    .select('*')
     .eq('id', id)
     .single();
     
@@ -795,13 +807,7 @@ export async function getLeadById(id) {
     throw new Error(`Get lead by ID failed: ${error.message}`);
   }
   
-  // Transform data to match original structure
-  const transformedData = {
-    ...data,
-    assigned_agent_name: data.users?.name || null
-  };
-  
-  return { rows: [transformedData], rowCount: 1 };
+  return { rows: [data], rowCount: 1 };
 }
 
 export async function insertLead(leadData) {
@@ -875,7 +881,7 @@ export async function getLeadsStats() {
   
   const { data, error } = await supabase
     .from('leads')
-    .select('leads_status, nominal_pinjaman');
+    .select('leads_status, outstanding');
     
   if (error) {
     throw new Error(`Get leads stats failed: ${error.message}`);
@@ -890,7 +896,7 @@ export async function getLeadsStats() {
       statsMap[status] = { count: 0, total_amount: 0 };
     }
     statsMap[status].count++;
-    statsMap[status].total_amount += lead.nominal_pinjaman || 0;
+    statsMap[status].total_amount += lead.outstanding || 0;
   });
   
   // Convert to array format and sort
@@ -1127,6 +1133,201 @@ export async function getAgents() {
   }
   
   return { rows: data || [], rowCount: data?.length || 0 };
+}
+
+// Room participants management functions
+export async function addRoomParticipant(participantData) {
+  if (!supabase) {
+    throw new Error('Supabase client not initialized');
+  }
+  
+  const { data, error } = await supabase
+    .from('room_participants')
+    .insert({
+      room_id: participantData.room_id,
+      user_id: participantData.user_id,
+      joined_at: participantData.joined_at || new Date().toISOString()
+    })
+    .select()
+    .single();
+    
+  if (error) {
+    throw new Error(`Add room participant failed: ${error.message}`);
+  }
+  
+  return { rows: [data], rowCount: 1 };
+}
+
+export async function removeRoomParticipant(roomId, userId) {
+  if (!supabase) {
+    throw new Error('Supabase client not initialized');
+  }
+  
+  const { data, error } = await supabase
+    .from('room_participants')
+    .delete()
+    .eq('room_id', roomId)
+    .eq('user_id', userId)
+    .select();
+    
+  if (error) {
+    throw new Error(`Remove room participant failed: ${error.message}`);
+  }
+  
+  return { rows: data || [], rowCount: data?.length || 0 };
+}
+
+export async function removeRoomParticipantById(participantId) {
+  if (!supabase) {
+    throw new Error('Supabase client not initialized');
+  }
+  
+  const { data, error } = await supabase
+    .from('room_participants')
+    .delete()
+    .eq('id', participantId)
+    .select();
+    
+  if (error) {
+    throw new Error(`Remove room participant by ID failed: ${error.message}`);
+  }
+  
+  return { rows: data || [], rowCount: data?.length || 0 };
+}
+
+export async function getRoomParticipantsWithUsers(roomId) {
+  if (!supabase) {
+    throw new Error('Supabase client not initialized');
+  }
+  
+  const { data, error } = await supabase
+    .from('room_participants')
+    .select(`
+      user_id,
+      joined_at,
+      users!inner (
+        id,
+        name,
+        email,
+        role
+      )
+    `)
+    .eq('room_id', roomId)
+    .order('joined_at', { ascending: true });
+    
+  if (error) {
+    throw new Error(`Get room participants with users failed: ${error.message}`);
+  }
+  
+  // Transform data structure for clean response
+  const transformedData = data?.map(participant => ({
+    user_id: participant.user_id,
+    joined_at: participant.joined_at,
+    user_name: participant.users.name,
+    user_email: participant.users.email,
+    user_role: participant.users.role
+  })) || [];
+  
+  return { rows: transformedData, rowCount: transformedData.length };
+}
+
+export async function checkRoomParticipant(roomId, userId) {
+  if (!supabase) {
+    throw new Error('Supabase client not initialized');
+  }
+  
+  const { data, error } = await supabase
+    .from('room_participants')
+    .select('room_id, user_id, joined_at')
+    .eq('room_id', roomId)
+    .eq('user_id', userId)
+    .single();
+    
+  if (error) {
+    if (error.code === 'PGRST116') {
+      return { rows: [], rowCount: 0 };
+    }
+    throw new Error(`Check room participant failed: ${error.message}`);
+  }
+  
+  return { rows: [data], rowCount: 1 };
+}
+
+// Helper function to get leads by phone number
+export async function getLeadByPhone(phone) {
+  if (!supabase) {
+    throw new Error('Supabase client not initialized');
+  }
+  
+  const { data, error } = await supabase
+    .from('leads')
+    .select('*')
+    .eq('phone', phone)
+    .single();
+    
+  if (error) {
+    if (error.code === 'PGRST116') {
+      return { rows: [], rowCount: 0 };
+    }
+    throw new Error(`Get lead by phone failed: ${error.message}`);
+  }
+  
+  return { rows: [data], rowCount: 1 };
+}
+
+// Get leads assigned to specific user through room participants
+export async function getLeadsByUserId(userId) {
+  if (!supabase) {
+    throw new Error('Supabase client not initialized');
+  }
+  
+  // Step 1: Get room_ids for the user from room_participants
+  const { data: roomParticipants, error: participantsError } = await supabase
+    .from('room_participants')
+    .select('room_id')
+    .eq('user_id', userId);
+    
+  if (participantsError) {
+    throw new Error(`Get room participants failed: ${participantsError.message}`);
+  }
+  
+  if (!roomParticipants || roomParticipants.length === 0) {
+    return { rows: [], rowCount: 0 };
+  }
+  
+  // Extract room_ids
+  const roomIds = roomParticipants.map(rp => rp.room_id);
+  
+  // Step 2: Get leads_ids from rooms table based on room_ids
+  const { data: rooms, error: roomsError } = await supabase
+    .from('rooms')
+    .select('leads_id')
+    .in('id', roomIds)
+    .not('leads_id', 'is', null);
+    
+  if (roomsError) {
+    throw new Error(`Get rooms failed: ${roomsError.message}`);
+  }
+  
+  if (!rooms || rooms.length === 0) {
+    return { rows: [], rowCount: 0 };
+  }
+  
+  // Extract leads_ids (remove duplicates)
+  const leadsIds = [...new Set(rooms.map(room => room.leads_id))];
+  
+  // Step 3: Get leads data based on leads_ids
+  const { data: leads, error: leadsError } = await supabase
+    .from('leads')
+    .select('*')
+    .in('id', leadsIds)
+    .order('created_at', { ascending: false });
+    
+  if (leadsError) {
+    throw new Error(`Get leads failed: ${leadsError.message}`);
+  }
+  
+  return { rows: leads || [], rowCount: leads?.length || 0 };
 }
 
 // Export supabase client for direct access when needed

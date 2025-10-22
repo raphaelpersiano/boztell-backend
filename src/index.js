@@ -96,7 +96,7 @@ app.use('/messages', messagesRouter);
 app.use('/leads', leadsRouter);
 app.use('/users', usersRouter);
 app.use('/api/auth', authRouter);
-app.use('/api', roomsRouter);
+app.use('/rooms', roomsRouter);
 
 // API info endpoint
 app.get('/api', (req, res) => {
@@ -117,7 +117,7 @@ app.get('/api', (req, res) => {
       devices: '/devices/register',
       media: '/media/upload',
       messages: '/messages/send',
-      rooms: '/api/rooms',
+      rooms: '/rooms',
       auth: '/api/auth/login',
       health: '/health'
     }
