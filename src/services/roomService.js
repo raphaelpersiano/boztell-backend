@@ -7,9 +7,10 @@ import { logger } from '../utils/logger.js';
  * Auto-creates lead if phone number doesn't exist in leads table
  * @param {string} phone - Customer phone number
  * @param {object} metadata - Optional room metadata (leads_id, title, etc.)
+ * @param {object} io - Socket.IO instance for broadcasting new room event
  * @returns {object} Room data
  */
-export async function ensureRoom(phone, metadata = {}) {
+export async function ensureRoom(phone, metadata = {}, io = null) {
   try {
     // Check if room already exists by phone number
     const existingResult = await getRoomByPhoneDb(phone);
@@ -89,6 +90,18 @@ export async function ensureRoom(phone, metadata = {}) {
       leadsId,
       autoCreatedLead: !metadata.leads_id && leadsId
     }, 'New room created successfully with lead relationship');
+    
+    // Broadcast new room to all connected clients (for real-time room list updates)
+    if (io) {
+      io.emit('new_room', {
+        ...newRoom,
+        unread_count: 0,
+        last_message: null,
+        created_at: newRoom.created_at
+      });
+      
+      logger.debug({ roomId: newRoom.id }, 'New room event broadcasted to all clients');
+    }
     
     return newRoom;
     

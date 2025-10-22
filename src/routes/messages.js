@@ -11,6 +11,53 @@ import { logger } from '../utils/logger.js';
 
 const router = express.Router();
 
+/**
+ * Get messages for a room (historical messages)
+ * GET /messages/room/:roomId
+ * Query params: limit (default 50), offset (default 0), order (asc/desc, default desc)
+ */
+router.get('/room/:roomId', async (req, res) => {
+  try {
+    const { roomId } = req.params;
+    const limit = parseInt(req.query.limit) || 50;
+    const offset = parseInt(req.query.offset) || 0;
+    const order = req.query.order === 'asc' ? 'ASC' : 'DESC';
+    
+    if (!roomId) {
+      return res.status(400).json({ error: 'Room ID required' });
+    }
+    
+    const { getMessagesByRoom } = await import('../db.js');
+    const result = await getMessagesByRoom(roomId, limit, offset, order);
+    
+    logger.info({ 
+      room_id: roomId,
+      message_count: result.rows.length,
+      limit,
+      offset,
+      order
+    }, 'Fetched messages for room');
+    
+    res.json({
+      success: true,
+      room_id: roomId,
+      messages: result.rows,
+      count: result.rows.length,
+      limit,
+      offset,
+      order,
+      has_more: result.rows.length === limit // If we got exactly limit, there might be more
+    });
+    
+  } catch (err) {
+    logger.error({ err, roomId: req.params.roomId }, 'Failed to fetch messages for room');
+    res.status(500).json({ 
+      error: 'Failed to fetch messages',
+      message: err.message 
+    });
+  }
+});
+
 // Configure multer for media uploads
 const upload = multer({
   storage: multer.memoryStorage(),

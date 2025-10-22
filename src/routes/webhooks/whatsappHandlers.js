@@ -85,7 +85,7 @@ async function processIncomingMessage(io, message, value) {
     const senderName = contact.profile?.name || from;
     
     // Ensure room exists and get room ID
-    const room = await ensureRoom(from, { phone: from, title: senderName || 'Personal' });
+    const room = await ensureRoom(from, { phone: from, title: senderName || 'Personal' }, io);
     const roomId = room.id;
 
   const baseMessage = {

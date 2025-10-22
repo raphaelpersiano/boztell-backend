@@ -2,7 +2,9 @@
 
 ## 📋 Overview
 
-Dokumentasi ini menjelaskan bagaimana frontend dapat mengintegrasikan dengan backend untuk menerima **real-time updates** dari WhatsApp messages menggunakan **Socket.IO**.
+Dokumentasi ini menjelaskan bagaimana frontend dapat mengintegrasikan dengan backend untuk:
+1. **Fetch historical messages** dari database (REST API)
+2. **Menerima real-time updates** untuk messages baru (Socket.IO)
 
 **Backend Tech Stack:**
 - Express.js REST API
@@ -13,7 +15,147 @@ Dokumentasi ini menjelaskan bagaimana frontend dapat mengintegrasikan dengan bac
 
 ---
 
-## 🔌 Socket.IO Integration
+## ⚠️ **PENTING: Socket.IO ≠ Historical Data**
+
+**Socket.IO hanya untuk REAL-TIME updates**, BUKAN untuk fetch historical messages!
+
+### ❌ **Masalah Umum:**
+```
+Frontend buka chat room
+   ↓
+Socket.IO join room ✅
+   ↓  
+Listen untuk messages baru ✅
+   ↓
+❌ Chat kosong! (tidak ada historical messages)
+```
+
+### ✅ **Solusi yang Benar:**
+```
+Frontend buka chat room
+   ↓
+1. GET /messages/room/:roomId  ← Fetch history dari DB
+   ↓
+2. Display historical messages
+   ↓
+3. Socket.IO join room
+   ↓
+4. Listen untuk messages BARU
+   ↓
+5. Append new messages ke existing list
+```
+
+---
+
+## � **Step 1: Fetch Historical Messages (REST API)**
+
+### Get Messages for a Room
+
+**Endpoint:** `GET /messages/room/:roomId`
+
+**Query Parameters:**
+- `limit` (optional, default: 50) - Jumlah messages yang diambil
+- `offset` (optional, default: 0) - Offset untuk pagination
+- `order` (optional, default: 'desc') - `asc` atau `desc` (newest first)
+
+```javascript
+// Fetch historical messages ketika room dibuka
+async function loadRoomMessages(roomId) {
+  try {
+    const response = await fetch(`http://localhost:8080/messages/room/${roomId}?limit=50&order=desc`);
+    const data = await response.json();
+    
+    if (data.success) {
+      // Display messages (reverse karena order=desc, newest first)
+      const messages = data.messages.reverse();
+      
+      messages.forEach(message => {
+        addMessageToChat(message);
+      });
+      
+      console.log(`Loaded ${data.count} historical messages`);
+      
+      // Check if there are more messages
+      if (data.has_more) {
+        console.log('More messages available, implement load more');
+      }
+    }
+  } catch (error) {
+    console.error('Failed to load messages:', error);
+  }
+}
+
+// Example: Load messages when agent opens chat
+loadRoomMessages('room-uuid-123');
+```
+
+**Response:**
+```javascript
+{
+  "success": true,
+  "room_id": "room-uuid-123",
+  "messages": [
+    {
+      "id": "msg-uuid-1",
+      "room_id": "room-uuid-123",
+      "user_id": null,  // null = customer
+      "content_type": "text",
+      "content_text": "Hello!",
+      "wa_message_id": "wamid.xxx",
+      "status": "received",
+      "created_at": "2025-10-23T10:30:00Z",
+      ...
+    },
+    // ... more messages
+  ],
+  "count": 50,
+  "limit": 50,
+  "offset": 0,
+  "order": "desc",
+  "has_more": true  // true if more messages available
+}
+```
+
+---
+
+### Pagination (Load More Messages)
+
+```javascript
+let currentOffset = 0;
+const messagesPerPage = 50;
+
+async function loadMoreMessages(roomId) {
+  currentOffset += messagesPerPage;
+  
+  const response = await fetch(
+    `http://localhost:8080/messages/room/${roomId}?limit=${messagesPerPage}&offset=${currentOffset}&order=desc`
+  );
+  
+  const data = await response.json();
+  
+  if (data.success && data.messages.length > 0) {
+    // Prepend older messages to top of chat
+    const messages = data.messages.reverse();
+    prependMessagesToChat(messages);
+    
+    return data.has_more; // Return true if more available
+  }
+  
+  return false;
+}
+
+// Example: Infinite scroll
+chatContainer.addEventListener('scroll', () => {
+  if (chatContainer.scrollTop === 0) {
+    // User scrolled to top, load older messages
+    loadMoreMessages(currentRoomId);
+  }
+});
+```
+
+---
+
+## �🔌 **Step 2: Socket.IO Integration (Real-time)**
 
 ### 1. Installation
 
@@ -519,17 +661,27 @@ if (message.content_type === 'unsupported') {
 
 ---
 
-## 🎨 Complete React Component Example
+## 🎨 **Complete React Component Example (with Historical + Real-time)**
 
 ```jsx
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { io } from 'socket.io-client';
 
 const ChatRoom = ({ roomId, currentUserId }) => {
   const [socket, setSocket] = useState(null);
   const [messages, setMessages] = useState([]);
   const [isTyping, setIsTyping] = useState(false);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  const [hasMoreMessages, setHasMoreMessages] = useState(false);
+  const [offset, setOffset] = useState(0);
+  const messagesEndRef = useRef(null);
 
+  // Step 1: Load historical messages
+  useEffect(() => {
+    loadHistoricalMessages(roomId);
+  }, [roomId]);
+
+  // Step 2: Initialize Socket.IO for real-time updates
   useEffect(() => {
     // Initialize socket connection
     const newSocket = io('http://localhost:8080', {
@@ -538,21 +690,39 @@ const ChatRoom = ({ roomId, currentUserId }) => {
 
     setSocket(newSocket);
 
-    // Join room
-    newSocket.emit('join_room', roomId);
+    // Connection events
+    newSocket.on('connect', () => {
+      console.log('✅ Connected to socket:', newSocket.id);
+      
+      // Join room setelah connect
+      newSocket.emit('join_room', roomId);
+    });
 
-    // Listen for new messages
+    newSocket.on('disconnect', (reason) => {
+      console.log('❌ Disconnected:', reason);
+    });
+
+    // Listen for new messages (REAL-TIME)
     newSocket.on('new_message', (message) => {
+      console.log('📨 New message received:', message);
+      
+      // Append to existing messages
       setMessages(prev => [...prev, message]);
+      
+      // Auto-scroll to bottom
+      scrollToBottom();
       
       // Play notification if from customer
       if (message.user_id === null) {
         playNotificationSound();
+        showDesktopNotification(message);
       }
     });
 
     // Listen for status updates
     newSocket.on('message_status_update', (statusUpdate) => {
+      console.log('✓✓ Status update:', statusUpdate);
+      
       setMessages(prev => prev.map(msg => 
         msg.wa_message_id === statusUpdate.wa_message_id
           ? { ...msg, status: statusUpdate.status }
@@ -562,10 +732,12 @@ const ChatRoom = ({ roomId, currentUserId }) => {
 
     // Listen for typing indicator
     newSocket.on('typing_indicator', (data) => {
-      setIsTyping(data.is_typing);
-      
-      if (data.is_typing) {
-        setTimeout(() => setIsTyping(false), 3000);
+      if (data.room_id === roomId) {
+        setIsTyping(data.is_typing);
+        
+        if (data.is_typing) {
+          setTimeout(() => setIsTyping(false), 3000);
+        }
       }
     });
 
@@ -575,6 +747,65 @@ const ChatRoom = ({ roomId, currentUserId }) => {
       newSocket.disconnect();
     };
   }, [roomId]);
+
+  // Load historical messages from REST API
+  const loadHistoricalMessages = async (roomId) => {
+    try {
+      setIsLoadingHistory(true);
+      
+      const response = await fetch(
+        `http://localhost:8080/messages/room/${roomId}?limit=50&order=desc`
+      );
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        // Reverse karena order=desc (newest first dari API)
+        const historicalMessages = data.messages.reverse();
+        
+        setMessages(historicalMessages);
+        setHasMoreMessages(data.has_more);
+        setOffset(data.messages.length);
+        
+        console.log(`✅ Loaded ${data.count} historical messages`);
+        
+        // Scroll to bottom setelah load
+        setTimeout(scrollToBottom, 100);
+      }
+    } catch (error) {
+      console.error('❌ Failed to load historical messages:', error);
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
+
+  // Load more (older) messages
+  const loadMoreMessages = async () => {
+    try {
+      const response = await fetch(
+        `http://localhost:8080/messages/room/${roomId}?limit=50&offset=${offset}&order=desc`
+      );
+      
+      const data = await response.json();
+      
+      if (data.success && data.messages.length > 0) {
+        const olderMessages = data.messages.reverse();
+        
+        // Prepend older messages
+        setMessages(prev => [...olderMessages, ...prev]);
+        setOffset(prev => prev + data.messages.length);
+        setHasMoreMessages(data.has_more);
+        
+        console.log(`✅ Loaded ${data.count} more messages`);
+      }
+    } catch (error) {
+      console.error('❌ Failed to load more messages:', error);
+    }
+  };
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
 
   const renderMessage = (message) => {
     const isCustomer = message.user_id === null;
@@ -605,7 +836,7 @@ const ChatRoom = ({ roomId, currentUserId }) => {
         {message.content_type === 'media' && (
           <div className="message-bubble media">
             {message.media_type === 'image' && (
-              <img src={message.gcs_url} alt="Image" />
+              <img src={message.gcs_url} alt="Image" loading="lazy" />
             )}
             {message.media_type === 'video' && (
               <video controls src={message.gcs_url} />
@@ -626,7 +857,7 @@ const ChatRoom = ({ roomId, currentUserId }) => {
         {message.content_type === 'location' && (
           <div className="message-bubble location">
             <div className="location-content">
-              📍 Location shared
+              📍 {message.content_text}
             </div>
           </div>
         )}
@@ -646,12 +877,40 @@ const ChatRoom = ({ roomId, currentUserId }) => {
 
   const playNotificationSound = () => {
     const audio = new Audio('/notification.mp3');
-    audio.play();
+    audio.play().catch(e => console.log('Could not play sound:', e));
   };
+
+  const showDesktopNotification = (message) => {
+    if (Notification.permission === 'granted') {
+      new Notification('New message from customer', {
+        body: message.content_text || 'Media message',
+        icon: '/logo.png'
+      });
+    }
+  };
+
+  if (isLoadingHistory) {
+    return <div className="loading">Loading messages...</div>;
+  }
 
   return (
     <div className="chat-room">
+      <div className="chat-header">
+        <h3>Chat Room: {roomId}</h3>
+      </div>
+      
       <div className="messages-container">
+        {/* Load more button */}
+        {hasMoreMessages && (
+          <button 
+            onClick={loadMoreMessages}
+            className="load-more-btn"
+          >
+            Load More Messages
+          </button>
+        )}
+        
+        {/* Messages list */}
         {messages.map(renderMessage)}
         
         {/* Typing indicator */}
@@ -665,6 +924,13 @@ const ChatRoom = ({ roomId, currentUserId }) => {
             </div>
           </div>
         )}
+        
+        {/* Auto-scroll anchor */}
+        <div ref={messagesEndRef} />
+      </div>
+      
+      <div className="chat-input">
+        {/* Your message input component */}
       </div>
     </div>
   );
@@ -675,7 +941,201 @@ export default ChatRoom;
 
 ---
 
-## 🔧 Helper Functions
+## 📊 **Data Flow Summary**
+
+```
+┌─────────────────────────────────────────────┐
+│  1. Frontend Opens Chat Room                │
+└──────────────────┬──────────────────────────┘
+                   ↓
+┌─────────────────────────────────────────────┐
+│  2. GET /messages/room/:roomId              │
+│     ← Fetch historical messages dari DB     │
+│     ✅ Return 50 messages (or more)         │
+└──────────────────┬──────────────────────────┘
+                   ↓
+┌─────────────────────────────────────────────┐
+│  3. Display Historical Messages             │
+│     ✅ Chat tidak kosong!                   │
+└──────────────────┬──────────────────────────┘
+                   ↓
+┌─────────────────────────────────────────────┐
+│  4. Socket.IO Connect & Join Room           │
+│     socket.emit('join_room', roomId)        │
+└──────────────────┬──────────────────────────┘
+                   ↓
+┌─────────────────────────────────────────────┐
+│  5. Listen for Real-time Updates            │
+│     socket.on('new_message', ...)           │
+│     socket.on('message_status_update', ...) │
+└──────────────────┬──────────────────────────┘
+                   ↓
+┌─────────────────────────────────────────────┐
+│  Customer Sends WhatsApp Message            │
+└──────────────────┬──────────────────────────┘
+                   ↓
+┌─────────────────────────────────────────────┐
+│  6. Backend Webhook Receives Message        │
+│     → Save to Database                      │
+│     → Socket.IO emit 'new_message'          │
+└──────────────────┬──────────────────────────┘
+                   ↓
+┌─────────────────────────────────────────────┐
+│  7. Frontend Receives via Socket.IO         │
+│     → Append to messages array              │
+│     → Display in real-time ⚡               │
+└─────────────────────────────────────────────┘
+```
+
+---
+
+## 🔧 **API Endpoints Summary**
+
+| Method | Endpoint | Purpose | When to Use |
+|--------|----------|---------|-------------|
+| `GET` | `/messages/room/:roomId` | Fetch historical messages | When opening chat room |
+| `GET` | `/messages/room/:roomId?offset=50` | Load more (pagination) | Load older messages |
+| Socket.IO | `join_room` | Subscribe to room updates | After loading history |
+| Socket.IO | `new_message` | Receive new messages | Real-time updates |
+| Socket.IO | `message_status_update` | Message read receipts | Real-time status |
+
+---
+
+## ⚡ **Best Practices**
+
+### 1. **Always Load History First**
+```javascript
+// ✅ CORRECT
+async function openChatRoom(roomId) {
+  // 1. Load historical messages
+  await loadHistoricalMessages(roomId);
+  
+  // 2. Then connect Socket.IO
+  socket.emit('join_room', roomId);
+}
+
+// ❌ WRONG
+function openChatRoom(roomId) {
+  // Only Socket.IO, no historical data!
+  socket.emit('join_room', roomId);
+  // Chat akan kosong!
+}
+```
+
+### 2. **Prevent Duplicate Messages**
+```javascript
+socket.on('new_message', (newMessage) => {
+  // Check if message already exists (by ID)
+  const exists = messages.find(m => m.id === newMessage.id);
+  
+  if (!exists) {
+    setMessages(prev => [...prev, newMessage]);
+  }
+});
+```
+
+### 3. **Handle Reconnection**
+```javascript
+socket.on('reconnect', () => {
+  console.log('Reconnected! Re-joining room...');
+  
+  // Re-join room after reconnection
+  socket.emit('join_room', roomId);
+  
+  // Optionally: Refresh latest messages to catch any missed
+  refreshLatestMessages(roomId);
+});
+```
+
+### 4. **Optimize Pagination**
+```javascript
+// Load more when scrolling to top
+const handleScroll = (e) => {
+  const { scrollTop } = e.target;
+  
+  if (scrollTop === 0 && hasMoreMessages && !isLoading) {
+    loadMoreMessages();
+  }
+};
+```
+
+---
+
+## 🐛 **Troubleshooting**
+
+### **Problem: Chat kosong padahal ada messages di database**
+
+**Cause:** Hanya pakai Socket.IO, tidak fetch historical data
+
+**Solution:**
+```javascript
+// ✅ Tambahkan REST API call sebelum Socket.IO
+await fetch(`/messages/room/${roomId}`);
+```
+
+---
+
+### **Problem: Duplicate messages**
+
+**Cause:** Message masuk via REST API dan Socket.IO
+
+**Solution:**
+```javascript
+// Check duplicate by message ID
+const addMessage = (msg) => {
+  setMessages(prev => {
+    const exists = prev.find(m => m.id === msg.id);
+    return exists ? prev : [...prev, msg];
+  });
+};
+```
+
+---
+
+### **Problem: Messages tidak real-time**
+
+**Cause:** Tidak join room atau connection error
+
+**Solution:**
+```javascript
+// Check connection status
+socket.on('connect', () => {
+  console.log('Connected:', socket.id);
+  socket.emit('join_room', roomId); // ✅ Don't forget!
+});
+```
+
+---
+
+## 🎯 **Quick Start Checklist**
+
+- [ ] Install `socket.io-client`
+- [ ] **Fetch historical messages dengan REST API** (`GET /messages/room/:roomId`)
+- [ ] Display historical messages di UI
+- [ ] Initialize Socket.IO connection
+- [ ] Join room dengan `socket.emit('join_room', roomId)`
+- [ ] Listen to `new_message` event untuk messages baru
+- [ ] Listen to `message_status_update` untuk status updates
+- [ ] Handle pagination (load more older messages)
+- [ ] Prevent duplicate messages
+- [ ] Auto-scroll to bottom untuk new messages
+- [ ] Leave room dengan `socket.emit('leave_room', roomId)` on unmount
+
+---
+
+## 📞 **Support**
+
+Jika masih ada masalah:
+1. Check console logs (frontend & backend)
+2. Verify REST API returns data: `GET /messages/room/:roomId`
+3. Verify Socket.IO connection: Check `connect` event
+4. Check network tab untuk API calls
+5. Contact backend team
+
+---
+
+**Happy coding! 🎉**
+
 
 ### Format Timestamp
 
