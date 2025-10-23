@@ -1184,6 +1184,38 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
         waMessageId 
       }, 'Message record created in database with complete data');
 
+      // Emit Socket.IO event
+      if (io) {
+        const messagePayload = {
+          id: messageId,
+          room_id: mediaRoomId,
+          user_id: validatedUserId,
+          content_type: 'media',
+          content_text: caption || null,
+          media_type: mediaType,
+          media_id: waUpload.id,
+          gcs_filename: supabaseStorage.gcsFilename,
+          gcs_url: supabaseStorage.url,
+          file_size: supabaseStorage.size,
+          mime_type: mimetype,
+          original_filename: storedName,
+          wa_message_id: waMessageId,
+          status: 'sent',
+          status_timestamp: messageData.created_at,
+          reply_to_wa_message_id: null,
+          reaction_emoji: null,
+          reaction_to_wa_message_id: null,
+          metadata: metadata,
+          created_at: messageData.created_at,
+          updated_at: messageData.created_at
+        };
+        
+        io.to(`room:${mediaRoomId}`).emit('room:new_message', messagePayload);
+        io.emit('new_message', messagePayload);
+        
+        logger.info({ messageId, roomId: mediaRoomId }, '📡 Emitting new_message events for media combined');
+      }
+
       logger.info({
         to: cleanPhone,
         mediaType,
