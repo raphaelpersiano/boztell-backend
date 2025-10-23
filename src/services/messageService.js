@@ -65,27 +65,28 @@ export async function handleIncomingMessage({ io }, input) {
 
     // 3. Emit to socket for real-time updates
     const messagePayload = {
-      // Ensure ALL fields are explicitly included
+      // Ensure ALL fields are explicitly included with null fallback (not undefined)
       id: message.id,
       room_id: message.room_id,
-      user_id: message.user_id,
+      user_id: message.user_id || null,
       content_type: message.content_type,
-      content_text: message.content_text,
-      wa_message_id: message.wa_message_id,
+      content_text: message.content_text || null,
+      wa_message_id: message.wa_message_id || null,
       status: message.status || 'sent',
-      reply_to_wa_message_id: message.reply_to_wa_message_id,
-      reaction_emoji: message.reaction_emoji,
-      reaction_to_wa_message_id: message.reaction_to_wa_message_id,
-      // Media fields
-      media_type: message.media_type,
-      media_id: message.media_id,
-      gcs_filename: message.gcs_filename,
-      gcs_url: message.gcs_url,
-      file_size: message.file_size,
-      mime_type: message.mime_type,
-      original_filename: message.original_filename,
-      // Metadata
-      metadata: message.metadata,
+      reply_to_wa_message_id: message.reply_to_wa_message_id || null,
+      reaction_emoji: message.reaction_emoji || null,
+      reaction_to_wa_message_id: message.reaction_to_wa_message_id || null,
+      status_timestamp: message.status_timestamp || null,
+      // Media fields (explicitly null if not present)
+      media_type: message.media_type || null,
+      media_id: message.media_id || null,
+      gcs_filename: message.gcs_filename || null,
+      gcs_url: message.gcs_url || null,
+      file_size: message.file_size || null,
+      mime_type: message.mime_type || null,
+      original_filename: message.original_filename || null,
+      // Metadata (explicitly null if not present)
+      metadata: message.metadata || null,
       created_at: message.created_at,
       updated_at: message.updated_at
     };

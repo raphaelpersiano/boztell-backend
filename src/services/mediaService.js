@@ -74,26 +74,27 @@ export async function handleIncomingMedia({ io }, input) {
       metadata: input.metadata || {}
     });
     
-    // 4. Emit to Socket.io room - use direct message structure
+    // 4. Emit to Socket.io room - use direct message structure with explicit null fallbacks
     const mediaPayload = {
       id: message.id,
       room_id: input.room_id,
-      user_id: input.user_id,
+      user_id: input.user_id || null,
       content_type: 'media',
-      content_text: input.caption || '',
+      content_text: input.caption || null,
       media_type: input.media_type,
-      media_id: input.media_id,
+      media_id: input.media_id || null,
       gcs_filename: gcsData.gcsFilename,
       gcs_url: gcsData.url,
       file_size: gcsData.size,
       mime_type: gcsData.contentType,
       original_filename: storedName,
-      wa_message_id: input.wa_message_id,
+      wa_message_id: input.wa_message_id || null,
       status: message.status || 'received',
+      status_timestamp: message.status_timestamp || null,
       reply_to_wa_message_id: input.reply_to_wa_message_id || null,
       reaction_emoji: null,
       reaction_to_wa_message_id: null,
-      metadata: input.metadata || {},
+      metadata: input.metadata || null,
       created_at: message.created_at,
       updated_at: message.updated_at,
       // Additional media info

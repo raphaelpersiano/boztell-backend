@@ -209,7 +209,7 @@ router.post('/send', async (req, res) => {
 
     logger.info({ to: cleanPhone, messageId, waMessageId }, 'Text message sent to WhatsApp and saved to database');
 
-    // Emit Socket.IO event for real-time updates
+    // Emit Socket.IO event for real-time updates with explicit null fallbacks
     if (io) {
       const messagePayload = {
         id: messageId,
@@ -217,8 +217,9 @@ router.post('/send', async (req, res) => {
         user_id: validatedUserId,
         content_type: 'text',
         content_text: text,
-        wa_message_id: waMessageId,
+        wa_message_id: waMessageId || null,
         status: 'sent',
+        status_timestamp: messageData.created_at,
         reply_to_wa_message_id: replyTo || null,
         reaction_emoji: null,
         reaction_to_wa_message_id: null,
@@ -229,7 +230,7 @@ router.post('/send', async (req, res) => {
         file_size: null,
         mime_type: null,
         original_filename: null,
-        metadata: baseMeta,
+        metadata: baseMeta || null,
         created_at: messageData.created_at,
         updated_at: messageData.created_at
       };
