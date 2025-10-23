@@ -9,7 +9,7 @@ import { setupSocket } from './socket/index.js';
 import { createWebhookRouter } from './routes/webhook.js';
 import { devicesRouter } from './routes/devices.js';
 import { mediaRouter } from './routes/media.js';
-import { messagesRouter } from './routes/messages.js';
+import { createMessagesRouter } from './routes/messages.js';
 import leadsRouter from './routes/leads.js';
 import usersRouter from './routes/users.js';
 import authRouter from './routes/auth.js';
@@ -103,7 +103,7 @@ async function initializeServices() {
 app.use('/webhook', createWebhookRouter(io));
 app.use('/devices', devicesRouter);
 app.use('/media', mediaRouter);
-app.use('/messages', messagesRouter);
+app.use('/messages', createMessagesRouter(io));
 app.use('/leads', leadsRouter);
 app.use('/users', usersRouter);
 app.use('/auth', authRouter);

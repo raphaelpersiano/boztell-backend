@@ -9,7 +9,8 @@ import { insertMessage, updateMessage } from '../db.js';
 import { getUserForMessage } from '../services/userService.js';
 import { logger } from '../utils/logger.js';
 
-const router = express.Router();
+export function createMessagesRouter(io) {
+  const router = express.Router();
 
 /**
  * Get messages for a room (historical messages)
@@ -207,6 +208,45 @@ router.post('/send', async (req, res) => {
     }
 
     logger.info({ to: cleanPhone, messageId, waMessageId }, 'Text message sent to WhatsApp and saved to database');
+
+    // Emit Socket.IO event for real-time updates
+    if (io) {
+      const socketPayload = {
+        room_id: textRoom.id,
+        message: {
+          id: messageId,
+          room_id: textRoom.id,
+          user_id: validatedUserId,
+          content_type: 'text',
+          content_text: text,
+          wa_message_id: waMessageId,
+          status: 'sent',
+          reply_to_wa_message_id: replyTo || null,
+          reaction_emoji: null,
+          reaction_to_wa_message_id: null,
+          media_type: null,
+          media_id: null,
+          gcs_filename: null,
+          gcs_url: null,
+          file_size: null,
+          mime_type: null,
+          original_filename: null,
+          metadata: baseMeta,
+          created_at: messageData.created_at,
+          updated_at: messageData.created_at
+        }
+      };
+      
+      io.to(`room:${textRoom.id}`).emit('room:new_message', socketPayload);
+      io.emit('new_message', socketPayload);
+      
+      logger.info({ 
+        messageId, 
+        roomId: textRoom.id,
+        userId: validatedUserId,
+        hasId: !!socketPayload.message.id
+      }, '📡 Emitting new_message events for agent message');
+    }
 
     res.json({
       success: true,
@@ -1865,4 +1905,8 @@ router.post('/test', async (req, res) => {
   }
 });
 
-export const messagesRouter = router;
+  return router;
+}
+
+// For backward compatibility
+export const messagesRouter = createMessagesRouter(null);

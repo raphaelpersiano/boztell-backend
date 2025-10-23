@@ -48,13 +48,49 @@ export async function handleIncomingMessage({ io }, input) {
       roomId: input.room_id,
       userId: input.user_id, // null for customer messages
       contentType: input.content_type,
-      waMessageId: input.wa_message_id
+      waMessageId: input.wa_message_id,
+      messageFromDb: message
     }, 'Incoming message saved to database');
+
+    // Verify message has required fields
+    if (!message || !message.id) {
+      logger.error({ 
+        message,
+        messageData,
+        hasMessage: !!message,
+        messageKeys: message ? Object.keys(message) : null
+      }, 'ERROR: Message from database missing id field!');
+      throw new Error('Message saved to database but missing id field');
+    }
 
     // 3. Emit to socket for real-time updates
     const socketPayload = {
       room_id: input.room_id,
-      message
+      message: {
+        // Ensure ALL fields are explicitly included
+        id: message.id,
+        room_id: message.room_id,
+        user_id: message.user_id,
+        content_type: message.content_type,
+        content_text: message.content_text,
+        wa_message_id: message.wa_message_id,
+        status: message.status || 'sent',
+        reply_to_wa_message_id: message.reply_to_wa_message_id,
+        reaction_emoji: message.reaction_emoji,
+        reaction_to_wa_message_id: message.reaction_to_wa_message_id,
+        // Media fields
+        media_type: message.media_type,
+        media_id: message.media_id,
+        gcs_filename: message.gcs_filename,
+        gcs_url: message.gcs_url,
+        file_size: message.file_size,
+        mime_type: message.mime_type,
+        original_filename: message.original_filename,
+        // Metadata
+        metadata: message.metadata,
+        created_at: message.created_at,
+        updated_at: message.updated_at
+      }
     };
     
     // Emit to room-specific channel (best practice for scalability)
@@ -64,8 +100,10 @@ export async function handleIncomingMessage({ io }, input) {
     io.emit('new_message', socketPayload);
     
     logger.info({ 
-      messageId: id,
+      messageId: message.id,
       roomId: input.room_id,
+      hasId: !!socketPayload.message.id,
+      socketPayloadKeys: Object.keys(socketPayload.message),
       events: ['room:new_message', 'new_message']
     }, '📡 Emitting new_message events via Socket.IO');
 
