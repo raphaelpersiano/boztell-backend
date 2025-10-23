@@ -74,16 +74,43 @@ export async function handleIncomingMedia({ io }, input) {
       metadata: input.metadata || {}
     });
     
-    // 4. Emit to Socket.io room
-  io.to(`room:${input.room_id}`).emit('room:new_message', {
+    // 4. Emit to Socket.io room - use direct message structure
+    const mediaPayload = {
+      id: message.id,
       room_id: input.room_id,
-      message: {
-        ...message,
-        content_type: 'media',
-    media_url: gcsData.url,
-        thumbnail_url: await generateThumbnailIfNeeded(gcsData, input.media_type)
-      }
-    });
+      user_id: input.user_id,
+      content_type: 'media',
+      content_text: input.caption || '',
+      media_type: input.media_type,
+      media_id: input.media_id,
+      gcs_filename: gcsData.gcsFilename,
+      gcs_url: gcsData.url,
+      file_size: gcsData.size,
+      mime_type: gcsData.contentType,
+      original_filename: storedName,
+      wa_message_id: input.wa_message_id,
+      status: message.status || 'received',
+      reply_to_wa_message_id: input.reply_to_wa_message_id || null,
+      reaction_emoji: null,
+      reaction_to_wa_message_id: null,
+      metadata: input.metadata || {},
+      created_at: message.created_at,
+      updated_at: message.updated_at,
+      // Additional media info
+      media_url: gcsData.url,
+      thumbnail_url: await generateThumbnailIfNeeded(gcsData, input.media_type)
+    };
+    
+    // Emit direct message object (not wrapped)
+    io.to(`room:${input.room_id}`).emit('room:new_message', mediaPayload);
+    io.emit('new_message', mediaPayload);
+    
+    logger.info({ 
+      messageId,
+      roomId: input.room_id,
+      mediaType: input.media_type,
+      hasId: !!mediaPayload.id
+    }, '📡 Emitting new_message events for media');
     
     // 5. Send push notifications
     await notifyRoomParticipants({
