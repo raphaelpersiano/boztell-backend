@@ -337,6 +337,38 @@ router.post('/send-contacts', async (req, res) => {
       // Don't throw error here since WhatsApp message was sent successfully
     }
 
+    // Emit Socket.IO event
+    if (io) {
+      const messagePayload = {
+        id: messageId,
+        room_id: contactsRoomId,
+        user_id: validatedUserId,
+        content_type: 'contacts',
+        content_text: `contacts:${contacts.length}`,
+        wa_message_id: waMessageId,
+        status: 'sent',
+        status_timestamp: messageData.created_at,
+        reply_to_wa_message_id: replyTo || null,
+        reaction_emoji: null,
+        reaction_to_wa_message_id: null,
+        media_type: null,
+        media_id: null,
+        gcs_filename: null,
+        gcs_url: null,
+        file_size: null,
+        mime_type: null,
+        original_filename: null,
+        metadata: meta,
+        created_at: messageData.created_at,
+        updated_at: messageData.created_at
+      };
+      
+      io.to(`room:${contactsRoomId}`).emit('room:new_message', messagePayload);
+      io.emit('new_message', messagePayload);
+      
+      logger.info({ messageId, roomId: contactsRoomId }, '📡 Emitting new_message events for contacts');
+    }
+
     logger.info({ to: cleanPhone, messageId, waMessageId, contactsCount: contacts.length }, 'Contacts message sent to WhatsApp and saved to database');
 
     res.json({ success: true, to: cleanPhone, type: 'contacts', message_id: messageId, whatsapp_message_id: waMessageId, result });
@@ -410,6 +442,38 @@ router.post('/send-location', async (req, res) => {
     } catch (insertErr) {
       logger.error({ err: insertErr, messageId, waMessageId, to: cleanPhone }, 'Failed to insert location message to database (message already sent to WhatsApp)');
       // Don't throw error here since WhatsApp message was sent successfully
+    }
+
+    // Emit Socket.IO event
+    if (io) {
+      const messagePayload = {
+        id: messageId,
+        room_id: locationRoomId,
+        user_id: validatedUserId,
+        content_type: 'location',
+        content_text: `Location: ${location.latitude}, ${location.longitude}`,
+        wa_message_id: waMessageId,
+        status: 'sent',
+        status_timestamp: messageData.created_at,
+        reply_to_wa_message_id: replyTo || null,
+        reaction_emoji: null,
+        reaction_to_wa_message_id: null,
+        media_type: null,
+        media_id: null,
+        gcs_filename: null,
+        gcs_url: null,
+        file_size: null,
+        mime_type: null,
+        original_filename: null,
+        metadata: meta,
+        created_at: messageData.created_at,
+        updated_at: messageData.created_at
+      };
+      
+      io.to(`room:${locationRoomId}`).emit('room:new_message', messagePayload);
+      io.emit('new_message', messagePayload);
+      
+      logger.info({ messageId, roomId: locationRoomId }, '📡 Emitting new_message events for location');
     }
 
     logger.info({ to: cleanPhone, messageId, waMessageId, location }, 'Location message sent to WhatsApp and saved to database');
@@ -487,6 +551,38 @@ router.post('/send-reaction', async (req, res) => {
       // Don't throw error here since WhatsApp message was sent successfully
     }
 
+    // Emit Socket.IO event
+    if (io) {
+      const messagePayload = {
+        id: messageId,
+        room_id: reactionRoomId,
+        user_id: validatedUserId,
+        content_type: 'reaction',
+        content_text: `Reaction ${emoji} to ${message_id}`,
+        wa_message_id: waMessageId,
+        status: 'sent',
+        status_timestamp: messageData.created_at,
+        reply_to_wa_message_id: null,
+        reaction_emoji: emoji,
+        reaction_to_wa_message_id: message_id,
+        media_type: null,
+        media_id: null,
+        gcs_filename: null,
+        gcs_url: null,
+        file_size: null,
+        mime_type: null,
+        original_filename: null,
+        metadata: meta,
+        created_at: messageData.created_at,
+        updated_at: messageData.created_at
+      };
+      
+      io.to(`room:${reactionRoomId}`).emit('room:new_message', messagePayload);
+      io.emit('new_message', messagePayload);
+      
+      logger.info({ messageId, roomId: reactionRoomId }, '📡 Emitting new_message events for reaction');
+    }
+
     logger.info({ to: cleanPhone, messageId, waMessageId, emoji, reactionTo: message_id }, 'Reaction message sent to WhatsApp and saved to database');
 
     res.json({ success: true, to: cleanPhone, type: 'reaction', message_id: messageId, whatsapp_message_id: waMessageId, result });
@@ -528,6 +624,9 @@ router.post('/send-media', async (req, res) => {
     
     const cleanPhone = validateWhatsAppPhoneNumber(to);
     
+    // Ensure room exists
+    const mediaRoom = await ensureRoom(cleanPhone, { phone: cleanPhone });
+    
     let result;
     
     if (mediaId) {
@@ -544,12 +643,82 @@ router.post('/send-media', async (req, res) => {
       });
     }
     
+    const waMessageId = result.messages?.[0]?.id || null;
+    
+    // Save to database
+    const messageId = uuidv4();
+    const messageData = {
+      id: messageId,
+      room_id: mediaRoom.id,
+      user_id: validatedUserId,
+      content_type: 'media',
+      content_text: caption || null,
+      media_type: mediaType,
+      media_id: mediaId || null,
+      gcs_filename: null,
+      gcs_url: mediaUrl || null,
+      file_size: null,
+      mime_type: null,
+      original_filename: filename || null,
+      wa_message_id: waMessageId,
+      reply_to_wa_message_id: null,
+      reaction_emoji: null,
+      reaction_to_wa_message_id: null,
+      metadata: { 
+        direction: 'outgoing', 
+        source: 'api', 
+        type: 'media',
+        media_source: mediaId ? 'whatsapp_media_id' : 'url'
+      },
+      created_at: new Date().toISOString()
+    };
+    
+    try {
+      await insertMessage(messageData);
+      logger.info({ messageId, waMessageId, roomId: mediaRoom.id }, 'Media message saved to database');
+    } catch (insertErr) {
+      logger.error({ err: insertErr, messageId, waMessageId }, 'Failed to insert media message to database (message already sent to WhatsApp)');
+    }
+    
+    // Emit Socket.IO event
+    if (io) {
+      const messagePayload = {
+        id: messageId,
+        room_id: mediaRoom.id,
+        user_id: validatedUserId,
+        content_type: 'media',
+        content_text: caption || null,
+        media_type: mediaType,
+        media_id: mediaId || null,
+        gcs_filename: null,
+        gcs_url: mediaUrl || null,
+        file_size: null,
+        mime_type: null,
+        original_filename: filename || null,
+        wa_message_id: waMessageId,
+        status: 'sent',
+        status_timestamp: messageData.created_at,
+        reply_to_wa_message_id: null,
+        reaction_emoji: null,
+        reaction_to_wa_message_id: null,
+        metadata: messageData.metadata,
+        created_at: messageData.created_at,
+        updated_at: messageData.created_at
+      };
+      
+      io.to(`room:${mediaRoom.id}`).emit('room:new_message', messagePayload);
+      io.emit('new_message', messagePayload);
+      
+      logger.info({ messageId, roomId: mediaRoom.id }, '📡 Emitting new_message events for media');
+    }
+    
     logger.info({ 
       to: cleanPhone, 
       mediaType,
       mediaId: mediaId || 'url',
-      messageId: result.messages?.[0]?.id 
-    }, 'Media message sent to WhatsApp successfully');
+      messageId,
+      waMessageId 
+    }, 'Media message sent to WhatsApp and saved to database');
     
     res.json({
       success: true,
@@ -557,7 +726,8 @@ router.post('/send-media', async (req, res) => {
       mediaType,
       mediaId: mediaId || null,
       mediaUrl: mediaUrl || null,
-      whatsapp_message_id: result.messages?.[0]?.id,
+      message_id: messageId,
+      whatsapp_message_id: waMessageId,
       result
     });
     
@@ -617,6 +787,9 @@ router.post('/send-media-file', upload.single('media'), async (req, res) => {
       mediaType = 'document';
     }
     
+    // Ensure room exists
+    const mediaFileRoom = await ensureRoom(cleanPhone, { phone: cleanPhone });
+    
     // 1. Upload media to WhatsApp
     const uploadResult = await uploadMediaToWhatsApp({
       buffer,
@@ -629,6 +802,75 @@ router.post('/send-media-file', upload.single('media'), async (req, res) => {
       caption,
       filename: originalname
     });
+    
+    const waMessageId = sendResult.messages?.[0]?.id || null;
+    
+    // 2.5. Save media message to database
+    const mediaMessageId = uuidv4();
+    const mediaMessageData = {
+      id: mediaMessageId,
+      room_id: mediaFileRoom.id,
+      user_id: validatedUserId,
+      content_type: 'media',
+      content_text: caption || null,
+      media_type: mediaType,
+      media_id: uploadResult.id,
+      gcs_filename: null,
+      gcs_url: null,
+      file_size: buffer.length,
+      mime_type: mimetype,
+      original_filename: originalname,
+      wa_message_id: waMessageId,
+      reply_to_wa_message_id: null,
+      reaction_emoji: null,
+      reaction_to_wa_message_id: null,
+      metadata: { 
+        direction: 'outgoing', 
+        source: 'api', 
+        type: 'media',
+        upload_method: 'send-media-file'
+      },
+      created_at: new Date().toISOString()
+    };
+    
+    try {
+      await insertMessage(mediaMessageData);
+      logger.info({ messageId: mediaMessageId, waMessageId, roomId: mediaFileRoom.id }, 'Media message saved to database');
+    } catch (insertErr) {
+      logger.error({ err: insertErr, messageId: mediaMessageId, waMessageId }, 'Failed to insert media message to database (message already sent to WhatsApp)');
+    }
+    
+    // Emit Socket.IO event for media message
+    if (io) {
+      const messagePayload = {
+        id: mediaMessageId,
+        room_id: mediaFileRoom.id,
+        user_id: validatedUserId,
+        content_type: 'media',
+        content_text: caption || null,
+        media_type: mediaType,
+        media_id: uploadResult.id,
+        gcs_filename: null,
+        gcs_url: null,
+        file_size: buffer.length,
+        mime_type: mimetype,
+        original_filename: originalname,
+        wa_message_id: waMessageId,
+        status: 'sent',
+        status_timestamp: mediaMessageData.created_at,
+        reply_to_wa_message_id: null,
+        reaction_emoji: null,
+        reaction_to_wa_message_id: null,
+        metadata: mediaMessageData.metadata,
+        created_at: mediaMessageData.created_at,
+        updated_at: mediaMessageData.created_at
+      };
+      
+      io.to(`room:${mediaFileRoom.id}`).emit('room:new_message', messagePayload);
+      io.emit('new_message', messagePayload);
+      
+      logger.info({ messageId: mediaMessageId, roomId: mediaFileRoom.id }, '📡 Emitting new_message events for media file');
+    }
     
     // 3. For documents with caption, send separate text message (WhatsApp limitation workaround)
     let textMessageResult = null;
@@ -697,9 +939,10 @@ router.post('/send-media-file', upload.single('media'), async (req, res) => {
       mediaType,
       filename: originalname,
       mediaId: uploadResult.id,
-      messageId: sendResult.messages?.[0]?.id,
+      mediaMessageId,
+      waMessageId,
       textMessageId: textMessageResult?.messages?.[0]?.id || null
-    }, 'Media uploaded and sent to WhatsApp successfully');
+    }, 'Media uploaded, sent to WhatsApp, and saved to database successfully');
     
     res.json({
       success: true,
@@ -707,8 +950,9 @@ router.post('/send-media-file', upload.single('media'), async (req, res) => {
       mediaType,
       filename: originalname,
       size: buffer.length,
+      message_id: mediaMessageId,
       whatsapp_media_id: uploadResult.id,
-      whatsapp_message_id: sendResult.messages?.[0]?.id,
+      whatsapp_message_id: waMessageId,
       upload: uploadResult,
       send: sendResult,
       caption_handling: {
