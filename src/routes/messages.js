@@ -211,40 +211,39 @@ router.post('/send', async (req, res) => {
 
     // Emit Socket.IO event for real-time updates
     if (io) {
-      const socketPayload = {
+      const messagePayload = {
+        id: messageId,
         room_id: textRoom.id,
-        message: {
-          id: messageId,
-          room_id: textRoom.id,
-          user_id: validatedUserId,
-          content_type: 'text',
-          content_text: text,
-          wa_message_id: waMessageId,
-          status: 'sent',
-          reply_to_wa_message_id: replyTo || null,
-          reaction_emoji: null,
-          reaction_to_wa_message_id: null,
-          media_type: null,
-          media_id: null,
-          gcs_filename: null,
-          gcs_url: null,
-          file_size: null,
-          mime_type: null,
-          original_filename: null,
-          metadata: baseMeta,
-          created_at: messageData.created_at,
-          updated_at: messageData.created_at
-        }
+        user_id: validatedUserId,
+        content_type: 'text',
+        content_text: text,
+        wa_message_id: waMessageId,
+        status: 'sent',
+        reply_to_wa_message_id: replyTo || null,
+        reaction_emoji: null,
+        reaction_to_wa_message_id: null,
+        media_type: null,
+        media_id: null,
+        gcs_filename: null,
+        gcs_url: null,
+        file_size: null,
+        mime_type: null,
+        original_filename: null,
+        metadata: baseMeta,
+        created_at: messageData.created_at,
+        updated_at: messageData.created_at
       };
       
-      io.to(`room:${textRoom.id}`).emit('room:new_message', socketPayload);
-      io.emit('new_message', socketPayload);
+      // Emit message object directly (not wrapped)
+      io.to(`room:${textRoom.id}`).emit('room:new_message', messagePayload);
+      io.emit('new_message', messagePayload);
       
       logger.info({ 
         messageId, 
         roomId: textRoom.id,
         userId: validatedUserId,
-        hasId: !!socketPayload.message.id
+        hasId: !!messagePayload.id,
+        payloadKeys: Object.keys(messagePayload)
       }, '📡 Emitting new_message events for agent message');
     }
 

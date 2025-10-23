@@ -64,46 +64,44 @@ export async function handleIncomingMessage({ io }, input) {
     }
 
     // 3. Emit to socket for real-time updates
-    const socketPayload = {
-      room_id: input.room_id,
-      message: {
-        // Ensure ALL fields are explicitly included
-        id: message.id,
-        room_id: message.room_id,
-        user_id: message.user_id,
-        content_type: message.content_type,
-        content_text: message.content_text,
-        wa_message_id: message.wa_message_id,
-        status: message.status || 'sent',
-        reply_to_wa_message_id: message.reply_to_wa_message_id,
-        reaction_emoji: message.reaction_emoji,
-        reaction_to_wa_message_id: message.reaction_to_wa_message_id,
-        // Media fields
-        media_type: message.media_type,
-        media_id: message.media_id,
-        gcs_filename: message.gcs_filename,
-        gcs_url: message.gcs_url,
-        file_size: message.file_size,
-        mime_type: message.mime_type,
-        original_filename: message.original_filename,
-        // Metadata
-        metadata: message.metadata,
-        created_at: message.created_at,
-        updated_at: message.updated_at
-      }
+    const messagePayload = {
+      // Ensure ALL fields are explicitly included
+      id: message.id,
+      room_id: message.room_id,
+      user_id: message.user_id,
+      content_type: message.content_type,
+      content_text: message.content_text,
+      wa_message_id: message.wa_message_id,
+      status: message.status || 'sent',
+      reply_to_wa_message_id: message.reply_to_wa_message_id,
+      reaction_emoji: message.reaction_emoji,
+      reaction_to_wa_message_id: message.reaction_to_wa_message_id,
+      // Media fields
+      media_type: message.media_type,
+      media_id: message.media_id,
+      gcs_filename: message.gcs_filename,
+      gcs_url: message.gcs_url,
+      file_size: message.file_size,
+      mime_type: message.mime_type,
+      original_filename: message.original_filename,
+      // Metadata
+      metadata: message.metadata,
+      created_at: message.created_at,
+      updated_at: message.updated_at
     };
     
     // Emit to room-specific channel (best practice for scalability)
-    io.to(`room:${input.room_id}`).emit('room:new_message', socketPayload);
+    io.to(`room:${input.room_id}`).emit('room:new_message', messagePayload);
     
     // ALSO emit global event for backward compatibility with frontend
-    io.emit('new_message', socketPayload);
+    // Frontend expects message object directly, not wrapped
+    io.emit('new_message', messagePayload);
     
     logger.info({ 
       messageId: message.id,
       roomId: input.room_id,
-      hasId: !!socketPayload.message.id,
-      socketPayloadKeys: Object.keys(socketPayload.message),
+      hasId: !!messagePayload.id,
+      socketPayloadKeys: Object.keys(messagePayload),
       events: ['room:new_message', 'new_message']
     }, '📡 Emitting new_message events via Socket.IO');
 
