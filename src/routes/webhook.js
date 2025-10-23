@@ -20,57 +20,45 @@ export function createWebhookRouter(io) {
   });
 
   router.post('/whatsapp', async (req, res) => {
-    try {
-      // Log incoming webhook for debugging
-      logger.info({ 
-        headers: {
-          'content-type': req.get('content-type'),
-          'x-hub-signature-256': req.get('x-hub-signature-256') ? 'present' : 'missing'
-        },
-        bodyPreview: JSON.stringify(req.body).substring(0, 500),
-        bodyKeys: Object.keys(req.body || {}),
-        hasRawBody: !!req.rawBody,
-        rawBodyLength: req.rawBody?.length || 0
-      }, 'Received WhatsApp webhook POST request');
+    // Log incoming webhook for debugging
+    logger.info({ 
+      headers: {
+        'content-type': req.get('content-type'),
+        'x-hub-signature-256': req.get('x-hub-signature-256') ? 'present' : 'missing'
+      },
+      bodyPreview: JSON.stringify(req.body).substring(0, 500),
+      bodyKeys: Object.keys(req.body || {}),
+      hasRawBody: !!req.rawBody,
+      rawBodyLength: req.rawBody?.length || 0
+    }, 'Received WhatsApp webhook POST request');
 
-      // TEMPORARY: Skip signature validation for debugging
-      // TODO: Re-enable after setting WHATSAPP_SECRET in Cloud Run env vars
-      const skipValidation = !config.whatsapp.appSecret;
-      
-      if (!skipValidation) {
-        // Validate X-Hub-Signature-256
-        const isValid = verifySignature(req);
-        logger.info({ isValid, hasAppSecret: !!config.whatsapp.appSecret }, 'Signature validation result');
-        
-        if (!isValid) {
-          logger.warn({ 
-            signature: req.get('X-Hub-Signature-256'),
-            hasRawBody: !!req.rawBody,
-            hasAppSecret: !!config.whatsapp.appSecret 
-          }, 'Invalid WhatsApp signature');
-          return res.sendStatus(403);
-        }
-      } else {
-        logger.warn('WHATSAPP_SECRET not set - skipping signature validation (INSECURE!)');
-      }
-
-      const body = req.body;
-      
-      logger.info({ 
-        bodyObject: body?.object,
-        entryCount: body?.entry?.length || 0
-      }, 'Webhook body parsed successfully');
+    // TEMPORARY: Skip signature validation for debugging
+    // TODO: Re-enable after setting WHATSAPP_SECRET in Cloud Run env vars
+    const skipValidation = !config.whatsapp.appSecret;
     
-    } catch (parseError) {
-      logger.error({ 
-        error: parseError.message,
-        stack: parseError.stack
-      }, 'Error parsing webhook request');
-      return res.status(400).json({ 
-        error: 'Invalid request format',
-        details: parseError.message 
-      });
+    if (!skipValidation) {
+      // Validate X-Hub-Signature-256
+      const isValid = verifySignature(req);
+      logger.info({ isValid, hasAppSecret: !!config.whatsapp.appSecret }, 'Signature validation result');
+      
+      if (!isValid) {
+        logger.warn({ 
+          signature: req.get('X-Hub-Signature-256'),
+          hasRawBody: !!req.rawBody,
+          hasAppSecret: !!config.whatsapp.appSecret 
+        }, 'Invalid WhatsApp signature');
+        return res.sendStatus(403);
+      }
+    } else {
+      logger.warn('WHATSAPP_SECRET not set - skipping signature validation (INSECURE!)');
     }
+
+    const body = req.body;
+    
+    logger.info({ 
+      bodyObject: body?.object,
+      entryCount: body?.entry?.length || 0
+    }, 'Webhook body parsed successfully');
 
     try {
       logger.info({ 
