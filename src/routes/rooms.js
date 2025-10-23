@@ -5,12 +5,36 @@ import { logger } from '../utils/logger.js';
 const router = express.Router();
 
 /**
- * Get all rooms
- * Returns all rooms with details
+ * Get all rooms or rooms by user_id
+ * - Query param: user_id (optional) - filter rooms for specific agent
+ * - If user_id provided: returns rooms from room_participants (agent's assigned rooms)
+ * - If no user_id: returns all rooms (for admin/supervisor)
  */
 router.get('/', async (req, res) => {
   try {
-    // Get all rooms for now (no role-based filtering)
+    const { user_id } = req.query;
+
+    // If user_id provided, get only rooms assigned to that user (agent role)
+    if (user_id) {
+      const result = await getRoomsByUser(user_id);
+      
+      logger.info('Accessed rooms by user_id', {
+        user_id,
+        roomCount: result.rowCount
+      });
+
+      return res.json({
+        success: true,
+        data: {
+          rooms: result.rows,
+          total_count: result.rowCount,
+          filtered_by: 'user_id',
+          user_id
+        }
+      });
+    }
+
+    // No filter: get all rooms (admin/supervisor view)
     const result = await getAllRoomsWithDetails();
     const rooms = result.rows;
     

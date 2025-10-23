@@ -9,24 +9,76 @@ import { handleSystemEvent } from '../../services/systemService.js';
  * Route WhatsApp webhook events to appropriate handlers
  */
 export async function routeWhatsAppWebhook({ io, body }) {
-  if (!body?.entry) return [];
+  try {
+    logger.info({ 
+      hasEntry: !!body?.entry,
+      entryCount: body?.entry?.length || 0,
+      bodyKeys: Object.keys(body || {})
+    }, 'routeWhatsAppWebhook called');
 
-  const results = [];
-  
-  for (const entry of body.entry) {
-    if (!entry.changes) continue;
+    if (!body?.entry) {
+      logger.warn('No entry field in webhook body');
+      return [];
+    }
+
+    const results = [];
     
-    for (const change of entry.changes) {
-      const { field, value } = change;
+    for (const entry of body.entry) {
+      logger.info({ 
+        entryId: entry.id,
+        hasChanges: !!entry.changes,
+        changesCount: entry.changes?.length || 0
+      }, 'Processing entry');
       
-      if (field === 'messages') {
-        const processed = await processMessagesField(io, value);
-        results.push(...processed);
+      if (!entry.changes) continue;
+      
+      for (const change of entry.changes) {
+        const { field, value } = change;
+        
+        logger.info({ 
+          field,
+          hasMessages: !!value?.messages,
+          hasStatuses: !!value?.statuses,
+          messagesCount: value?.messages?.length || 0,
+          statusesCount: value?.statuses?.length || 0
+        }, 'Processing change');
+        
+        if (field === 'messages') {
+          try {
+            const processed = await processMessagesField(io, value);
+            results.push(...processed);
+          } catch (fieldError) {
+            logger.error({ 
+              error: fieldError.message,
+              stack: fieldError.stack,
+              field,
+              value 
+            }, 'Error processing messages field');
+            // Push error result but continue processing
+            results.push({ 
+              error: fieldError.message, 
+              type: 'processing_error',
+              field 
+            });
+          }
+        }
       }
     }
+    
+    logger.info({ 
+      resultsCount: results.length 
+    }, 'routeWhatsAppWebhook completed');
+    
+    return results;
+    
+  } catch (error) {
+    logger.error({ 
+      error: error.message,
+      stack: error.stack,
+      body 
+    }, 'Fatal error in routeWhatsAppWebhook');
+    throw error; // Re-throw to be caught by webhook.js
   }
-  
-  return results;
 }
 
 /**
@@ -75,20 +127,37 @@ async function processMessagesField(io, value) {
  */
 async function processIncomingMessage(io, message, value) {
   try {
-  const { type, from, id: wa_message_id, timestamp } = message;
+    logger.info({ 
+      messageType: message?.type,
+      from: message?.from,
+      wa_message_id: message?.id 
+    }, 'Starting processIncomingMessage');
+    
+    const { type, from, id: wa_message_id, timestamp } = message;
     const contacts = value.contacts || [];
     const metadata = value.metadata || {};
-  const context = message.context || null;
+    const context = message.context || null;
     
     // Find contact info
     const contact = contacts.find(c => c.wa_id === from) || {};
     const senderName = contact.profile?.name || from;
     
+    logger.info({ 
+      from, 
+      senderName, 
+      hasIo: !!io 
+    }, 'Ensuring room exists');
+    
     // Ensure room exists and get room ID
     const room = await ensureRoom(from, { phone: from, title: senderName || 'Personal' }, io);
     const roomId = room.id;
+    
+    logger.info({ 
+      roomId, 
+      from 
+    }, 'Room ensured successfully');
 
-  const baseMessage = {
+    const baseMessage = {
       room_id: roomId,
       user_id: null, // Customer messages have user_id as null
       wa_message_id,
@@ -160,12 +229,21 @@ async function processIncomingMessage(io, message, value) {
     }
     
   } catch (err) {
-    logger.error({ err, message }, 'Failed to process incoming message');
+    logger.error({ 
+      error: err.message,
+      stack: err.stack,
+      name: err.name,
+      message: message,
+      messageType: message?.type,
+      from: message?.from
+    }, 'Failed to process incoming message');
     return {
       type: 'message_processing_error',
       success: false,
       error: err.message,
-      wa_message_id: message?.id
+      errorStack: err.stack,
+      wa_message_id: message?.id,
+      messageType: message?.type
     };
   }
 }

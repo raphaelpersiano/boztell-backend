@@ -20,15 +20,64 @@ export function createWebhookRouter(io) {
   });
 
   router.post('/whatsapp', async (req, res) => {
-    // Validate X-Hub-Signature-256
-    if (!verifySignature(req)) {
-      logger.warn('Invalid WhatsApp signature');
-      return res.sendStatus(403);
+    try {
+      // Log incoming webhook for debugging
+      logger.info({ 
+        headers: {
+          'content-type': req.get('content-type'),
+          'x-hub-signature-256': req.get('x-hub-signature-256') ? 'present' : 'missing'
+        },
+        bodyPreview: JSON.stringify(req.body).substring(0, 500),
+        bodyKeys: Object.keys(req.body || {}),
+        hasRawBody: !!req.rawBody,
+        rawBodyLength: req.rawBody?.length || 0
+      }, 'Received WhatsApp webhook POST request');
+
+      // TEMPORARY: Skip signature validation for debugging
+      // TODO: Re-enable after setting WHATSAPP_SECRET in Cloud Run env vars
+      const skipValidation = !config.whatsapp.appSecret;
+      
+      if (!skipValidation) {
+        // Validate X-Hub-Signature-256
+        const isValid = verifySignature(req);
+        logger.info({ isValid, hasAppSecret: !!config.whatsapp.appSecret }, 'Signature validation result');
+        
+        if (!isValid) {
+          logger.warn({ 
+            signature: req.get('X-Hub-Signature-256'),
+            hasRawBody: !!req.rawBody,
+            hasAppSecret: !!config.whatsapp.appSecret 
+          }, 'Invalid WhatsApp signature');
+          return res.sendStatus(403);
+        }
+      } else {
+        logger.warn('WHATSAPP_SECRET not set - skipping signature validation (INSECURE!)');
+      }
+
+      const body = req.body;
+      
+      logger.info({ 
+        bodyObject: body?.object,
+        entryCount: body?.entry?.length || 0
+      }, 'Webhook body parsed successfully');
+    
+    } catch (parseError) {
+      logger.error({ 
+        error: parseError.message,
+        stack: parseError.stack
+      }, 'Error parsing webhook request');
+      return res.status(400).json({ 
+        error: 'Invalid request format',
+        details: parseError.message 
+      });
     }
 
-    const body = req.body;
-    
     try {
+      logger.info({ 
+        entryCount: body.entry?.length || 0,
+        object: body.object 
+      }, 'Processing WhatsApp webhook body');
+      
       const results = await routeWhatsAppWebhook({ io, body });
       
       // Check if any processing failed
@@ -70,10 +119,17 @@ export function createWebhookRouter(io) {
       });
       
     } catch (err) {
-      logger.error({ err, body }, 'Failed processing WhatsApp webhook');
+      logger.error({ 
+        error: err.message,
+        stack: err.stack,
+        name: err.name,
+        body: req.body
+      }, 'Failed processing WhatsApp webhook');
+      
       res.status(500).json({ 
         error: 'Webhook processing failed',
-        message: err.message 
+        message: err.message,
+        type: err.name
       });
     }
   });
@@ -83,14 +139,51 @@ export function createWebhookRouter(io) {
 
 function verifySignature(req) {
   const signature = req.get('X-Hub-Signature-256');
-  if (!signature || !config.whatsapp.appSecret) return true; // allow in dev
+  
+  // Log for debugging
+  logger.info({ 
+    hasSignature: !!signature,
+    hasAppSecret: !!config.whatsapp.appSecret,
+    hasRawBody: !!req.rawBody,
+    rawBodyType: typeof req.rawBody,
+    bodyType: typeof req.body
+  }, 'Verifying signature');
+  
+  // If no signature header or no app secret configured, allow (dev mode)
+  if (!signature || !config.whatsapp.appSecret) {
+    logger.warn('No signature or app secret - allowing webhook (dev mode)');
+    return true;
+  }
+  
+  // Get raw body - try multiple sources
+  let rawBody = req.rawBody;
+  
+  // If rawBody is not available, try to reconstruct from req.body
+  if (!rawBody && req.body) {
+    rawBody = Buffer.from(JSON.stringify(req.body), 'utf8');
+    logger.info('Reconstructed rawBody from req.body');
+  }
+  
+  if (!rawBody) {
+    logger.error('No raw body available for signature verification');
+    return false;
+  }
+  
   const expected = 'sha256=' + crypto
     .createHmac('sha256', config.whatsapp.appSecret)
-    .update(req.rawBody)
+    .update(rawBody)
     .digest('hex');
+    
+  logger.info({ 
+    receivedSignature: signature,
+    expectedSignature: expected,
+    match: signature === expected
+  }, 'Signature comparison');
+  
   try {
     return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
-  } catch (_) {
+  } catch (err) {
+    logger.error({ err }, 'Signature comparison failed');
     return false;
   }
 }

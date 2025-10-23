@@ -30,10 +30,14 @@ app.use(cors({
 app.use(helmet());
 // Serve uploaded files for development
 app.use('/uploads', express.static('uploads'));
+
 // Use express.json with a verify function to retain the raw body for signature validation
 app.use(express.json({
   limit: '1mb',
-  verify: (req, res, buf) => { req.rawBody = buf; }
+  verify: (req, res, buf, encoding) => { 
+    // Always store raw body for webhook signature validation
+    req.rawBody = buf; 
+  }
 }));
 
 // Health check - More comprehensive for Cloud Run

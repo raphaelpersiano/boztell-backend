@@ -449,7 +449,7 @@ export async function getAllRoomsWithDetails() {
       outstanding: room.leads.outstanding,
       loan_type: room.leads.loan_type
     } : null,
-    participants: room.room_participants?.map(participant => ({
+    participants: (Array.isArray(room.room_participants) ? room.room_participants : []).map(participant => ({
       user_id: participant.user_id,
       joined_at: participant.joined_at,
       user_info: participant.users ? {
@@ -458,7 +458,7 @@ export async function getAllRoomsWithDetails() {
         email: participant.users.email,
         role: participant.users.role
       } : null
-    })) || []
+    }))
   })) || [];
   
   return { rows: transformedData, rowCount: transformedData.length };
