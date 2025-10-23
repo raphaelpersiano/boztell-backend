@@ -93,14 +93,31 @@ export async function ensureRoom(phone, metadata = {}, io = null) {
     
     // Broadcast new room to all connected clients (for real-time room list updates)
     if (io) {
-      io.emit('new_room', {
-        ...newRoom,
+      // Prepare complete room data for frontend (like WhatsApp)
+      const newRoomPayload = {
+        room_id: newRoom.id,
+        room_phone: newRoom.phone,
+        room_title: newRoom.title,
+        room_created_at: newRoom.created_at,
+        room_updated_at: newRoom.updated_at,
+        leads_info: leadsId ? {
+          id: leadsId,
+          phone: phone,
+          name: metadata.customer_name || `Customer ${phone}`
+        } : null,
         unread_count: 0,
         last_message: null,
-        created_at: newRoom.created_at
-      });
+        participants: []
+      };
       
-      logger.debug({ roomId: newRoom.id }, 'New room event broadcasted to all clients');
+      // Emit global event for all agents/admins to see new room appear
+      io.emit('new_room', newRoomPayload);
+      
+      logger.info({ 
+        roomId: newRoom.id, 
+        phone,
+        title: roomTitle
+      }, '📡 Emitting new_room event - room will appear in real-time');
     }
     
     return newRoom;
