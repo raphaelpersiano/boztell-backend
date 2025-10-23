@@ -1175,6 +1175,8 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
         created_at: new Date().toISOString()
       };
       
+      logger.info({ messageData }, '💾 About to insert message to database');
+      
       await insertMessage(messageData);
       
       logger.info({ 
@@ -1182,7 +1184,7 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
         room_id: cleanPhone, 
         mediaId: waUpload.id,
         waMessageId 
-      }, 'Message record created in database with complete data');
+      }, '✅ Message record created in database with complete data');
 
       // Emit Socket.IO event
       if (io) {
@@ -1247,21 +1249,34 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
       });
 
     } catch (waErr) {
-      logger.error({ err: waErr, filename: originalname }, 'Failed in WhatsApp operations or database insert');
+      logger.error({ 
+        err: waErr, 
+        errMessage: waErr.message,
+        errStack: waErr.stack,
+        filename: originalname,
+        step: 'whatsapp_or_database'
+      }, '❌ Failed in WhatsApp operations or database insert');
       throw new Error(`WhatsApp/Database operation failed: ${waErr.message}`);
     }
 
   } catch (err) {
     logger.error({ 
       err, 
+      errMessage: err.message,
+      errStack: err.stack,
       to: req.body.to,
       filename: req.file?.originalname,
-      step: 'combined_media_flow'
-    }, 'Combined media flow failed');
+      step: 'combined_media_flow',
+      hasSupabaseStorage: !!supabaseStorage,
+      hasMessageId: !!messageId,
+      hasWaUpload: !!waUpload,
+      hasSendResult: !!sendResult
+    }, '❌❌❌ Combined media flow failed');
     
     return res.status(500).json({ 
       error: 'Failed to upload and send media', 
       message: err.message,
+      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
       details: {
         step_completed: {
           storage_upload: !!supabaseStorage,
