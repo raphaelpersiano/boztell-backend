@@ -51,11 +51,23 @@ export async function handleIncomingMessage({ io }, input) {
       waMessageId: input.wa_message_id
     }, 'Incoming message saved to database');
 
-    // 3. Emit to socket room for real-time updates
-    io.to(`room:${input.room_id}`).emit('room:new_message', {
+    // 3. Emit to socket for real-time updates
+    const socketPayload = {
       room_id: input.room_id,
       message
-    });
+    };
+    
+    // Emit to room-specific channel (best practice for scalability)
+    io.to(`room:${input.room_id}`).emit('room:new_message', socketPayload);
+    
+    // ALSO emit global event for backward compatibility with frontend
+    io.emit('new_message', socketPayload);
+    
+    logger.info({ 
+      messageId: id,
+      roomId: input.room_id,
+      events: ['room:new_message', 'new_message']
+    }, '📡 Emitting new_message events via Socket.IO');
 
     // 4. Send push notifications to participants
     await sendPushNotifications(input.room_id, {
