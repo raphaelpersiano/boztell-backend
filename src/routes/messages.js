@@ -3,7 +3,7 @@ import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
 import { sendTextMessage, sendMediaMessage, sendMediaByUrl, sendTemplateMessage, uploadMediaToWhatsApp, sendContactsMessage, sendLocationMessage, sendReactionMessage } from '../services/whatsappService.js';
 import { validateWhatsAppPhoneNumber } from '../services/whatsappService.js';
-import { uploadBuffer as uploadToGCS } from '../services/storageService.js';
+import { uploadBuffer as uploadToStorage } from '../services/storageService.js';
 import { ensureRoom } from '../services/roomService.js';
 import { insertMessage, updateMessage } from '../db.js';
 import { getUserForMessage } from '../services/userService.js';
@@ -965,7 +965,7 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
 
     try {
       // 1) Upload to Supabase Storage (organized by phone/date)
-      supabaseStorage = await uploadToGCS({
+      supabaseStorage = await uploadToStorage({
         buffer,
         filename: originalname,
         contentType: mimetype,
