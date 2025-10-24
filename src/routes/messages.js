@@ -748,7 +748,7 @@ router.post('/send-media', async (req, res) => {
  * - Image: ✅ Caption supported natively by WhatsApp
  * - Video: ✅ Caption supported natively by WhatsApp  
  * - Audio: ❌ Caption not supported (ignored by WhatsApp)
- * - Document: ❌ Caption not supported, sent as separate text message
+ * - Document: ⚠️ Caption supported but may not display in all clients
  */
 router.post('/send-media-file', upload.single('media'), async (req, res) => {
   try {
@@ -872,76 +872,13 @@ router.post('/send-media-file', upload.single('media'), async (req, res) => {
       logger.info({ messageId: mediaMessageId, roomId: mediaFileRoom.id }, '📡 Emitting new_message events for media file');
     }
     
-    // 3. For documents with caption, send separate text message (WhatsApp limitation workaround)
-    let textMessageResult = null;
-    let textMessageDbId = null;
-    if (mediaType === 'document' && caption && caption.trim()) {
-      try {
-        logger.info({ 
-          mediaType, 
-          caption: caption.trim(),
-          to: cleanPhone 
-        }, 'Sending separate text message for document caption (WhatsApp API limitation)');
-        
-        // Ensure room exists for text message
-        const textRoomId = await ensureRoomAndGetId(cleanPhone);
-        
-        textMessageResult = await sendTextMessage(cleanPhone, caption.trim());
-        
-        // Save text message to database
-        textMessageDbId = uuidv4();
-        const textMessageData = {
-          id: textMessageDbId,
-          room_id: textRoomId,
-          user_id: validatedUserId, // Use validated user_id, not null
-          content_type: 'text',
-          content_text: caption.trim(),
-          media_type: null,
-          media_id: null,
-          gcs_filename: null,
-          gcs_url: null,
-          file_size: null,
-          mime_type: null,
-          original_filename: null,
-          wa_message_id: textMessageResult.messages?.[0]?.id || null,
-          reply_to_wa_message_id: null,
-          reaction_emoji: null,
-          reaction_to_wa_message_id: null,
-          metadata: { 
-            direction: 'outgoing', 
-            source: 'api', 
-            type: 'text',
-            related_to: 'document_caption',
-            parent_media_message_id: sendResult.messages?.[0]?.id || null,
-            original_media_filename: originalname
-          },
-          created_at: new Date().toISOString()
-        };
-        
-        await insertMessage(textMessageData);
-        
-        logger.info({ 
-          textMessageId: textMessageResult.messages?.[0]?.id,
-          textMessageDbId,
-          originalCaption: caption.trim(),
-          parentMediaMessageId: sendResult.messages?.[0]?.id
-        }, 'Document caption sent as separate text message and saved to database');
-      } catch (textErr) {
-        logger.warn({ 
-          err: textErr, 
-          caption: caption.trim() 
-        }, 'Failed to send document caption as text message');
-      }
-    }
-    
     logger.info({ 
       to: cleanPhone,
       mediaType,
       filename: originalname,
       mediaId: uploadResult.id,
       mediaMessageId,
-      waMessageId,
-      textMessageId: textMessageResult?.messages?.[0]?.id || null
+      waMessageId
     }, 'Media uploaded, sent to WhatsApp, and saved to database successfully');
     
     res.json({
@@ -954,15 +891,7 @@ router.post('/send-media-file', upload.single('media'), async (req, res) => {
       whatsapp_media_id: uploadResult.id,
       whatsapp_message_id: waMessageId,
       upload: uploadResult,
-      send: sendResult,
-      caption_handling: {
-        caption_provided: !!caption,
-        caption_supported_by_media_type: ['image', 'video'].includes(mediaType),
-        separate_text_message_sent: mediaType === 'document' && !!caption && !!textMessageResult,
-        separate_text_message_id: textMessageResult?.messages?.[0]?.id || null,
-        separate_text_message_db_id: textMessageDbId,
-        note: mediaType === 'document' && caption ? 'Document captions not supported by WhatsApp API. Caption sent as separate text message and saved to database.' : null
-      }
+      send: sendResult
     });
     
   } catch (err) {
@@ -982,13 +911,13 @@ router.post('/send-media-file', upload.single('media'), async (req, res) => {
 /**
  * Combined flow: upload to Supabase Storage + persist DB + upload to WhatsApp + send to WhatsApp
  * POST /messages/send-media-combined
- * Form fields: media (file), to (phone), caption (optional), user_id (optional), sender_name (optional)
+ * Form fields: media (file), to (phone), caption (optional), user_id (required)
  * 
  * Caption Support by Media Type:
  * - Image: ✅ Caption supported natively by WhatsApp
  * - Video: ✅ Caption supported natively by WhatsApp  
  * - Audio: ❌ Caption not supported (ignored by WhatsApp)
- * - Document: ❌ Caption not supported, sent as separate text message automatically
+ * - Document: ⚠️ Caption supported but may not display in all clients
  */
 router.post('/send-media-combined', upload.single('media'), async (req, res) => {
   try {
@@ -1073,73 +1002,13 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
       });
       const waMessageId = sendResult.messages?.[0]?.id || null;
       
-      // 4) For documents with caption, send separate text message (WhatsApp limitation workaround)
-      let textMessageResult = null;
-      let textMessageDbId = null;
-      if (mediaType === 'document' && caption && caption.trim()) {
-        try {
-          logger.info({ 
-            mediaType, 
-            caption: caption.trim(),
-            to: cleanPhone 
-          }, 'Sending separate text message for document caption (WhatsApp API limitation)');
-          
-          textMessageResult = await sendTextMessage(cleanPhone, caption.trim());
-          
-          // Save text message to database
-          textMessageDbId = uuidv4();
-          const textMessageData = {
-            id: textMessageDbId,
-            room_id: cleanPhone,
-            user_id: validatedUserId, // Use validated user_id, not null
-            content_type: 'text',
-            content_text: caption.trim(),
-            media_type: null,
-            media_id: null,
-            gcs_filename: null,
-            gcs_url: null,
-            file_size: null,
-            mime_type: null,
-            original_filename: null,
-            wa_message_id: textMessageResult.messages?.[0]?.id || null,
-            reply_to_wa_message_id: null,
-            reaction_emoji: null,
-            reaction_to_wa_message_id: null,
-            metadata: { 
-              direction: 'outgoing', 
-              source: 'api', 
-              type: 'text',
-              related_to: 'document_caption',
-              parent_media_message_id: waMessageId,
-              original_media_filename: originalname
-            },
-            created_at: new Date().toISOString()
-          };
-          
-          await insertMessage(textMessageData);
-          
-          logger.info({ 
-            textMessageId: textMessageResult.messages?.[0]?.id,
-            textMessageDbId,
-            originalCaption: caption.trim(),
-            parentMediaMessageId: waMessageId
-          }, 'Document caption sent as separate text message and saved to database');
-        } catch (textErr) {
-          logger.warn({ 
-            err: textErr, 
-            caption: caption.trim() 
-          }, 'Failed to send document caption as text message');
-        }
-      }
-      
       logger.info({ 
         waMessageId, 
         mediaId: waUpload.id,
-        to: cleanPhone,
-        textMessageId: textMessageResult?.messages?.[0]?.id || null
+        to: cleanPhone
       }, 'WhatsApp message sent successfully');
 
-      // 6) Create DB row with ALL data at once (optimized - single query)
+      // 4) Create DB row with ALL data at once (optimized - single query)
       messageId = uuidv4();
       const metadata = { 
         direction: 'outgoing', 
@@ -1147,10 +1016,7 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
         filename: originalname,
         upload_step: 'complete',
         whatsapp_media_id: waUpload.id,
-        whatsapp_message_id: waMessageId,
-        media_caption_limitation: mediaType === 'document' && caption ? 'caption_sent_as_separate_text' : null,
-        separate_text_message_id: textMessageResult?.messages?.[0]?.id || null,
-        separate_text_message_db_id: textMessageDbId
+        whatsapp_message_id: waMessageId
       };
       const storedName = (supabaseStorage.gcsFilename || '').split('/').pop() || originalname;
       
@@ -1237,15 +1103,7 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
         whatsapp_media_id: waUpload.id,
         whatsapp_message_id: waMessageId,
         storage_url: supabaseStorage.url,
-        storage_filename: supabaseStorage.gcsFilename,
-        caption_handling: {
-          caption_provided: !!caption,
-          caption_supported_by_media_type: ['image', 'video'].includes(mediaType),
-          separate_text_message_sent: mediaType === 'document' && !!caption && !!textMessageResult,
-          separate_text_message_id: textMessageResult?.messages?.[0]?.id || null,
-          separate_text_message_db_id: textMessageDbId,
-          note: mediaType === 'document' && caption ? 'Document captions not supported by WhatsApp API. Caption sent as separate text message and saved to database.' : null
-        }
+        storage_filename: supabaseStorage.gcsFilename
       });
 
     } catch (waErr) {
