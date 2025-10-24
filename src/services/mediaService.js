@@ -160,6 +160,14 @@ export async function downloadWhatsAppMedia(mediaId) {
     
     const { url, mime_type, file_size, sha256 } = urlResponse.data;
     
+    logger.info({ 
+      mediaId,
+      whatsapp_url: url,
+      whatsapp_claimed_size: file_size,
+      mime_type,
+      sha256
+    }, '📥 WhatsApp media info - about to download');
+    
     // 2. Download the actual media file
     const mediaResponse = await axios.get(url, {
       headers: {
@@ -177,9 +185,19 @@ export async function downloadWhatsAppMedia(mediaId) {
       logger.warn({ 
         expected: file_size, 
         actual: buffer.length, 
+        difference: buffer.length - parseInt(file_size),
+        percentage: ((buffer.length / parseInt(file_size)) * 100).toFixed(2) + '%',
         mediaId 
-      }, 'File size mismatch');
+      }, '⚠️ File size mismatch - WhatsApp may have compressed the image');
     }
+    
+    logger.info({
+      mediaId,
+      downloaded_size: buffer.length,
+      whatsapp_claimed_size: file_size,
+      size_match: buffer.length === parseInt(file_size),
+      mime_type
+    }, '✅ WhatsApp media downloaded successfully');
     
     return {
       buffer,
