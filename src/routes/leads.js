@@ -1,5 +1,5 @@
 import express from 'express';
-import { getLeads, getLeadsCount, getLeadById, insertLead, updateLead, deleteLead, getLeadsStats, getLeadsByUserId } from '../db.js';
+import { getLeads, getLeadsCount, getLeadById, insertLead, updateLead, deleteLead, getLeadsStats, getLeadsByUserId, updateRoom } from '../db.js';
 import { logger } from '../utils/logger.js';
 
 const router = express.Router();
@@ -117,7 +117,9 @@ router.put('/:id', async (req, res) => {
       outstanding,
       loan_type,
       leads_status,
-      contact_status
+      contact_status,
+      room_id,
+      title
     } = req.body;
 
     // Build updates object with only non-null values
@@ -130,10 +132,22 @@ router.put('/:id', async (req, res) => {
     if (leads_status !== undefined) updates.leads_status = leads_status;
     if (contact_status !== undefined) updates.contact_status = contact_status;
 
+    // Update lead
     const { rows } = await updateLead(id, updates);
 
     if (rows.length === 0) {
       return res.status(404).json({ success: false, error: 'Lead not found' });
+    }
+
+    // If room_id and title provided, update room title as well
+    if (room_id && title) {
+      try {
+        await updateRoom(room_id, { title });
+        logger.info({ room_id, title, lead_id: id }, 'Room title updated along with lead');
+      } catch (roomError) {
+        logger.error({ error: roomError, room_id, title }, 'Failed to update room title, but lead updated successfully');
+        // Don't fail the whole request if room update fails
+      }
     }
 
     res.json({ success: true, data: rows[0] });

@@ -52,9 +52,9 @@ router.get('/room/:roomId', async (req, res) => {
     
   } catch (err) {
     logger.error({ err, roomId: req.params.roomId }, 'Failed to fetch messages for room');
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to fetch messages',
-      message: err.message 
+      message: err.message
     });
   }
 });
