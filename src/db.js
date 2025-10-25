@@ -460,6 +460,18 @@ export async function getAllRoomsWithDetails() {
     throw new Error(`Get all rooms with details failed: ${error.message}`);
   }
   
+  // Debug log to check room_participants structure
+  if (data && data.length > 0) {
+    const sampleRoom = data[0];
+    logger.debug({ 
+      sample_room_id: sampleRoom.id,
+      room_participants_type: typeof sampleRoom.room_participants,
+      room_participants_is_array: Array.isArray(sampleRoom.room_participants),
+      room_participants_value: sampleRoom.room_participants,
+      room_participants_length: sampleRoom.room_participants?.length
+    }, 'Debug: room_participants structure in getAllRoomsWithDetails');
+  }
+  
   // Get last message for each room
   const roomIds = data?.map(room => room.id) || [];
   let lastMessages = {};
@@ -486,36 +498,50 @@ export async function getAllRoomsWithDetails() {
   }
   
   // Transform untuk response yang consistent dengan getRoomsByUser
-  const transformedData = data?.map(room => ({
-    room_id: room.id,
-    room_phone: room.phone,
-    room_title: room.title,
-    room_created_at: room.created_at,
-    room_updated_at: room.updated_at,
-    last_message: lastMessages[room.id]?.content_text || null,
-    last_message_at: lastMessages[room.id]?.created_at || null,
-    is_assigned: Array.isArray(room.room_participants) && room.room_participants.length > 0,
-    leads_info: room.leads ? {
-      id: room.leads.id,
-      utm_id: room.leads.utm_id,
-      leads_status: room.leads.leads_status,
-      contact_status: room.leads.contact_status,
-      name: room.leads.name,
-      phone: room.leads.phone,
-      outstanding: room.leads.outstanding,
-      loan_type: room.leads.loan_type
-    } : null,
-    participants: (Array.isArray(room.room_participants) ? room.room_participants : []).map(participant => ({
-      user_id: participant.user_id,
-      joined_at: participant.joined_at,
-      user_info: participant.users ? {
-        id: participant.users.id,
-        name: participant.users.name,
-        email: participant.users.email,
-        role: participant.users.role
-      } : null
-    }))
-  })) || [];
+  const transformedData = data?.map(room => {
+    const participantsArray = room.room_participants || [];
+    const isAssigned = Array.isArray(participantsArray) && participantsArray.length > 0;
+    
+    // Debug logging for is_assigned issue
+    if (participantsArray.length > 0 && !isAssigned) {
+      logger.warn({ 
+        room_id: room.id, 
+        participants: participantsArray,
+        is_assigned: isAssigned 
+      }, 'is_assigned logic mismatch detected');
+    }
+    
+    return {
+      room_id: room.id,
+      room_phone: room.phone,
+      room_title: room.title,
+      room_created_at: room.created_at,
+      room_updated_at: room.updated_at,
+      last_message: lastMessages[room.id]?.content_text || null,
+      last_message_at: lastMessages[room.id]?.created_at || null,
+      is_assigned: isAssigned,
+      leads_info: room.leads ? {
+        id: room.leads.id,
+        utm_id: room.leads.utm_id,
+        leads_status: room.leads.leads_status,
+        contact_status: room.leads.contact_status,
+        name: room.leads.name,
+        phone: room.leads.phone,
+        outstanding: room.leads.outstanding,
+        loan_type: room.leads.loan_type
+      } : null,
+      participants: participantsArray.map(participant => ({
+        user_id: participant.user_id,
+        joined_at: participant.joined_at,
+        user_info: participant.users ? {
+          id: participant.users.id,
+          name: participant.users.name,
+          email: participant.users.email,
+          role: participant.users.role
+        } : null
+      }))
+    };
+  }) || [];
   
   return { rows: transformedData, rowCount: transformedData.length };
 }
