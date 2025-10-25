@@ -979,6 +979,93 @@ export async function getLeadsStats() {
   return { rows: stats, rowCount: stats.length };
 }
 
+// Get leads assigned to a specific user (for agent role)
+// Join: room_participants -> rooms -> leads
+export async function getLeadsByAssignedUser(userId, filters = {}) {
+  if (!supabase) {
+    throw new Error('Supabase client not initialized');
+  }
+  
+  // First, get all room_ids where user is participant
+  const { data: participantData, error: participantError } = await supabase
+    .from('room_participants')
+    .select('room_id')
+    .eq('user_id', userId);
+    
+  if (participantError) {
+    throw new Error(`Get room participants failed: ${participantError.message}`);
+  }
+  
+  const roomIds = participantData?.map(p => p.room_id) || [];
+  
+  if (roomIds.length === 0) {
+    return { rows: [], rowCount: 0 };
+  }
+  
+  // Get leads_id from rooms
+  const { data: roomsData, error: roomsError } = await supabase
+    .from('rooms')
+    .select('leads_id')
+    .in('id', roomIds)
+    .not('leads_id', 'is', null);
+    
+  if (roomsError) {
+    throw new Error(`Get rooms failed: ${roomsError.message}`);
+  }
+  
+  const leadsIds = roomsData?.map(r => r.leads_id) || [];
+  
+  if (leadsIds.length === 0) {
+    return { rows: [], rowCount: 0 };
+  }
+  
+  // Get leads with filters
+  let query = supabase
+    .from('leads')
+    .select('*')
+    .in('id', leadsIds);
+    
+  // Apply filters (same as getLeads)
+  if (filters.leads_status) {
+    query = query.eq('leads_status', filters.leads_status);
+  }
+  
+  if (filters.contact_status) {
+    query = query.eq('contact_status', filters.contact_status);
+  }
+  
+  if (filters.loan_type) {
+    query = query.eq('loan_type', filters.loan_type);
+  }
+  
+  if (filters.utm_id) {
+    query = query.eq('utm_id', filters.utm_id);
+  }
+  
+  if (filters.search) {
+    query = query.or(`name.ilike.%${filters.search}%,phone.ilike.%${filters.search}%`);
+  }
+  
+  query = query.order('created_at', { ascending: false });
+  
+  // Apply pagination
+  if (filters.limit) {
+    query = query.limit(filters.limit);
+  }
+  
+  if (filters.offset) {
+    query = query.range(filters.offset, filters.offset + (filters.limit || 50) - 1);
+  }
+  
+  const { data, error } = await query;
+  
+  if (error) {
+    throw new Error(`Get assigned leads failed: ${error.message}`);
+  }
+  
+  return { rows: data || [], rowCount: data?.length || 0 };
+}
+
 // Helper functions for media message operations
 export async function getMediaMessage(messageId) {
   if (!supabase) {

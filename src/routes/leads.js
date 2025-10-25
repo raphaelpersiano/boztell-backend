@@ -1,10 +1,13 @@
 import express from 'express';
-import { getLeads, getLeadsCount, getLeadById, insertLead, updateLead, deleteLead, getLeadsStats, getLeadsByUserId, updateRoom } from '../db.js';
+import { getLeads, getLeadsCount, getLeadById, insertLead, updateLead, deleteLead, getLeadsStats, getLeadsByUserId, getLeadsByAssignedUser, updateRoom } from '../db.js';
 import { logger } from '../utils/logger.js';
 
 const router = express.Router();
 
 // Get all leads with filtering and search
+// Role-based access:
+// - admin/supervisor: can access all leads
+// - agent: can only access assigned leads (via room_participants)
 router.get('/', async (req, res) => {
   try {
     const { 
@@ -14,7 +17,9 @@ router.get('/', async (req, res) => {
       utm_id,
       search, 
       page = 1, 
-      limit = 50 
+      limit = 50,
+      user_id,
+      user_role
     } = req.query;
 
     const offset = (parseInt(page) - 1) * parseInt(limit);
@@ -29,9 +34,25 @@ router.get('/', async (req, res) => {
       offset
     };
 
-    const { rows } = await getLeads(filters);
-    const { rows: countRows } = await getLeadsCount(filters);
-    const total = parseInt(countRows[0].count);
+    let rows, total;
+
+    // Role-based access control
+    if (user_role === 'agent' && user_id) {
+      // Agent: only get assigned leads
+      const result = await getLeadsByAssignedUser(user_id, filters);
+      rows = result.rows;
+      total = result.rowCount;
+      
+      logger.info({ user_id, user_role, leadCount: total }, 'Agent accessed assigned leads');
+    } else {
+      // Admin/Supervisor: get all leads
+      const result = await getLeads(filters);
+      const countResult = await getLeadsCount(filters);
+      rows = result.rows;
+      total = parseInt(countResult.rows[0].count);
+      
+      logger.info({ user_role, leadCount: total }, 'Admin/Supervisor accessed all leads');
+    }
 
     res.json({
       success: true,
@@ -41,6 +62,10 @@ router.get('/', async (req, res) => {
         limit: parseInt(limit),
         total,
         pages: Math.ceil(total / parseInt(limit))
+      },
+      meta: {
+        user_role,
+        access_type: user_role === 'agent' ? 'assigned_only' : 'all_leads'
       }
     });
   } catch (error) {
@@ -278,11 +303,11 @@ router.get('/phone/:phone', async (req, res) => {
   }
 });
 
-// Update lead status
+// Update lead status (for Kanban drag & drop)
 router.patch('/:id/status', async (req, res) => {
   try {
     const { id } = req.params;
-    const { leads_status } = req.body;
+    const { leads_status, user_id, user_name } = req.body;
 
     const validStatuses = ['cold', 'warm', 'hot', 'paid', 'service', 'repayment', 'advocate'];
 
@@ -308,6 +333,15 @@ router.patch('/:id/status', async (req, res) => {
     if (rows.length === 0) {
       return res.status(404).json({ success: false, error: 'Lead not found' });
     }
+
+    logger.info({ 
+      lead_id: id, 
+      old_status: rows[0].leads_status !== leads_status ? 'changed' : 'same',
+      new_status: leads_status,
+      user_id,
+      user_name,
+      action: 'kanban_drag_drop'
+    }, 'Lead status updated via Kanban');
 
     res.json({ success: true, data: rows[0] });
   } catch (error) {
