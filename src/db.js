@@ -401,6 +401,7 @@ export async function getRoomsByUser(userId) {
     participant_joined_at: item.joined_at,
     last_message: lastMessages[item.rooms.id]?.content_text || null,
     last_message_at: lastMessages[item.rooms.id]?.created_at || null,
+    is_assigned: true, // Always true for getRoomsByUser (user is participant)
     leads_info: item.rooms.leads ? {
       id: item.rooms.leads.id,
       utm_id: item.rooms.leads.utm_id,
@@ -493,6 +494,7 @@ export async function getAllRoomsWithDetails() {
     room_updated_at: room.updated_at,
     last_message: lastMessages[room.id]?.content_text || null,
     last_message_at: lastMessages[room.id]?.created_at || null,
+    is_assigned: Array.isArray(room.room_participants) && room.room_participants.length > 0,
     leads_info: room.leads ? {
       id: room.leads.id,
       utm_id: room.leads.utm_id,
