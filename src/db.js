@@ -499,17 +499,18 @@ export async function getAllRoomsWithDetails() {
   
   // Transform untuk response yang consistent dengan getRoomsByUser
   const transformedData = data?.map(room => {
-    const participantsArray = room.room_participants || [];
-    const isAssigned = Array.isArray(participantsArray) && participantsArray.length > 0;
+    // Ensure room_participants is always an array
+    let participantsArray = room.room_participants;
     
-    // Debug logging for is_assigned issue
-    if (participantsArray.length > 0 && !isAssigned) {
-      logger.warn({ 
-        room_id: room.id, 
-        participants: participantsArray,
-        is_assigned: isAssigned 
-      }, 'is_assigned logic mismatch detected');
+    // Handle different data types from Supabase
+    if (!participantsArray) {
+      participantsArray = [];
+    } else if (!Array.isArray(participantsArray)) {
+      // If it's an object, wrap it in array
+      participantsArray = [participantsArray];
     }
+    
+    const isAssigned = participantsArray.length > 0;
     
     return {
       room_id: room.id,
