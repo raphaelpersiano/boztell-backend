@@ -499,49 +499,58 @@ export async function getAllRoomsWithDetails() {
   
   // Transform untuk response yang consistent dengan getRoomsByUser
   const transformedData = data?.map(room => {
-    // Ensure room_participants is always an array
-    let participantsArray = room.room_participants;
-    
-    // Handle different data types from Supabase
-    if (!participantsArray) {
-      participantsArray = [];
-    } else if (!Array.isArray(participantsArray)) {
-      // If it's an object, wrap it in array
-      participantsArray = [participantsArray];
+    try {
+      // Ensure room_participants is always an array
+      let participantsArray = room.room_participants;
+      
+      // Handle different data types from Supabase
+      if (!participantsArray) {
+        participantsArray = [];
+      } else if (!Array.isArray(participantsArray)) {
+        // If it's an object, wrap it in array
+        participantsArray = [participantsArray];
+      }
+      
+      const isAssigned = participantsArray.length > 0;
+      
+      return {
+        room_id: room.id,
+        room_phone: room.phone,
+        room_title: room.title,
+        room_created_at: room.created_at,
+        room_updated_at: room.updated_at,
+        last_message: lastMessages[room.id]?.content_text || null,
+        last_message_at: lastMessages[room.id]?.created_at || null,
+        is_assigned: isAssigned,
+        leads_info: room.leads ? {
+          id: room.leads.id,
+          utm_id: room.leads.utm_id,
+          leads_status: room.leads.leads_status,
+          contact_status: room.leads.contact_status,
+          name: room.leads.name,
+          phone: room.leads.phone,
+          outstanding: room.leads.outstanding,
+          loan_type: room.leads.loan_type
+        } : null,
+        participants: participantsArray.map(participant => ({
+          user_id: participant?.user_id || null,
+          joined_at: participant?.joined_at || null,
+          user_info: participant?.users ? {
+            id: participant.users.id,
+            name: participant.users.name,
+            email: participant.users.email,
+            role: participant.users.role
+          } : null
+        }))
+      };
+    } catch (transformError) {
+      logger.error({ 
+        error: transformError, 
+        room_id: room?.id,
+        room_participants: room?.room_participants
+      }, 'Error transforming room data');
+      throw transformError;
     }
-    
-    const isAssigned = participantsArray.length > 0;
-    
-    return {
-      room_id: room.id,
-      room_phone: room.phone,
-      room_title: room.title,
-      room_created_at: room.created_at,
-      room_updated_at: room.updated_at,
-      last_message: lastMessages[room.id]?.content_text || null,
-      last_message_at: lastMessages[room.id]?.created_at || null,
-      is_assigned: isAssigned,
-      leads_info: room.leads ? {
-        id: room.leads.id,
-        utm_id: room.leads.utm_id,
-        leads_status: room.leads.leads_status,
-        contact_status: room.leads.contact_status,
-        name: room.leads.name,
-        phone: room.leads.phone,
-        outstanding: room.leads.outstanding,
-        loan_type: room.leads.loan_type
-      } : null,
-      participants: participantsArray.map(participant => ({
-        user_id: participant.user_id,
-        joined_at: participant.joined_at,
-        user_info: participant.users ? {
-          id: participant.users.id,
-          name: participant.users.name,
-          email: participant.users.email,
-          role: participant.users.role
-        } : null
-      }))
-    };
   }) || [];
   
   return { rows: transformedData, rowCount: transformedData.length };
