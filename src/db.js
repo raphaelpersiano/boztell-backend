@@ -366,6 +366,31 @@ export async function getRoomsByUser(userId) {
     throw new Error(`Get rooms by user failed: ${error.message}`);
   }
   
+  // Get last message for each room
+  const roomIds = data?.map(item => item.rooms.id) || [];
+  let lastMessages = {};
+  
+  if (roomIds.length > 0) {
+    // Get the latest message for each room
+    const { data: messagesData, error: messagesError } = await supabase
+      .from('messages')
+      .select('room_id, content_text, created_at')
+      .in('room_id', roomIds)
+      .order('created_at', { ascending: false });
+    
+    if (!messagesError && messagesData) {
+      // Group by room_id and get the first (latest) message for each room
+      messagesData.forEach(msg => {
+        if (!lastMessages[msg.room_id]) {
+          lastMessages[msg.room_id] = {
+            content_text: msg.content_text,
+            created_at: msg.created_at
+          };
+        }
+      });
+    }
+  }
+  
   // Transform data structure untuk response yang clean
   const transformedData = data?.map(item => ({
     room_id: item.rooms.id,
@@ -374,6 +399,8 @@ export async function getRoomsByUser(userId) {
     room_created_at: item.rooms.created_at,
     room_updated_at: item.rooms.updated_at,
     participant_joined_at: item.joined_at,
+    last_message: lastMessages[item.rooms.id]?.content_text || null,
+    last_message_at: lastMessages[item.rooms.id]?.created_at || null,
     leads_info: item.rooms.leads ? {
       id: item.rooms.leads.id,
       utm_id: item.rooms.leads.utm_id,
@@ -432,6 +459,31 @@ export async function getAllRoomsWithDetails() {
     throw new Error(`Get all rooms with details failed: ${error.message}`);
   }
   
+  // Get last message for each room
+  const roomIds = data?.map(room => room.id) || [];
+  let lastMessages = {};
+  
+  if (roomIds.length > 0) {
+    // Get the latest message for each room
+    const { data: messagesData, error: messagesError } = await supabase
+      .from('messages')
+      .select('room_id, content_text, created_at')
+      .in('room_id', roomIds)
+      .order('created_at', { ascending: false });
+    
+    if (!messagesError && messagesData) {
+      // Group by room_id and get the first (latest) message for each room
+      messagesData.forEach(msg => {
+        if (!lastMessages[msg.room_id]) {
+          lastMessages[msg.room_id] = {
+            content_text: msg.content_text,
+            created_at: msg.created_at
+          };
+        }
+      });
+    }
+  }
+  
   // Transform untuk response yang consistent dengan getRoomsByUser
   const transformedData = data?.map(room => ({
     room_id: room.id,
@@ -439,6 +491,8 @@ export async function getAllRoomsWithDetails() {
     room_title: room.title,
     room_created_at: room.created_at,
     room_updated_at: room.updated_at,
+    last_message: lastMessages[room.id]?.content_text || null,
+    last_message_at: lastMessages[room.id]?.created_at || null,
     leads_info: room.leads ? {
       id: room.leads.id,
       utm_id: room.leads.utm_id,
