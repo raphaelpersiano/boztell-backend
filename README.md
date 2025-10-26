@@ -49,20 +49,35 @@ GET /rooms/:roomId/messages   # Get messages in room
 POST /rooms                   # Create new room
 ```
 
-### Messages (All require user_id)
+### Messages (All require user_id and room_id)
 ```
 POST /messages/send                    # Send text message
 POST /messages/send-template          # Send template message
-POST /messages/send-media-image       # Send image
-POST /messages/send-media-document    # Send document
-POST /messages/send-media-audio       # Send audio
-POST /messages/send-media-video       # Send video
-POST /messages/send-media-sticker     # Send sticker
+POST /messages/send-media             # Send media (by ID/URL)
+POST /messages/send-media-file        # Upload and send media
+POST /messages/send-media-combined    # Full media flow (upload + send)
 POST /messages/send-location          # Send location
 POST /messages/send-contacts          # Send contacts
-POST /messages/send-quick-reply       # Send quick reply
-POST /messages/send-interactive-list  # Send interactive list
-POST /messages/send-interactive-button # Send interactive button
+POST /messages/send-reaction          # Send reaction emoji
+```
+
+### ⭐ New: Reply & Reaction System
+**Dokumentasi lengkap:** [REPLY_AND_REACTION_SYSTEM.md](./docs/REPLY_AND_REACTION_SYSTEM.md)
+
+```
+# Reply ke message lain
+POST /messages/send (with replyTo parameter)
+POST /messages/send-media (with replyTo parameter)
+
+# Reaction ke message
+POST /messages/send-reaction
+{
+  "to": "phone_number",
+  "message_id": "wa_message_id",  # wa_message_id yang di-react
+  "emoji": "👍",
+  "room_id": "room-uuid",
+  "user_id": "agent-id"
+}
 ```
 
 ### Webhook
@@ -107,10 +122,18 @@ CREATE TABLE messages (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   room_id UUID REFERENCES rooms(id) NOT NULL,
   user_id UUID REFERENCES users(id), -- NULL = customer message
-  content_type VARCHAR(20) NOT NULL,
+  content_type VARCHAR(20) NOT NULL,  -- 'text', 'media', 'location', 'contacts', 'template', 'reaction'
   content_text TEXT,
   content_media_url TEXT,
   wa_message_id VARCHAR(255),
+  
+  -- Reply System
+  reply_to_wa_message_id TEXT,  -- wa_message_id yang di-reply
+  
+  -- Reaction System
+  reaction_emoji TEXT,  -- Emoji (hanya untuk content_type='reaction')
+  reaction_to_wa_message_id TEXT,  -- wa_message_id yang di-react
+  
   created_at TIMESTAMP DEFAULT NOW()
 );
 ```

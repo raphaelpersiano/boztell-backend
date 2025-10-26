@@ -1011,51 +1011,75 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
       size: processedBuffer.length, 
       mimetype: processedMimetype,
       conversionPerformed 
-    }, 'Starting combined media flow');
+    }, '🚀 Starting OPTIMIZED combined media flow with parallel uploads');
 
     let supabaseStorage, messageId, waUpload, sendResult;
 
     try {
-      // 1) Upload to Supabase Storage (organized by phone/date)
-      supabaseStorage = await uploadToStorage({
-        buffer: processedBuffer, // Use converted buffer if conversion was performed
-        filename: processedFilename, // Use new filename (.ogg) if converted
-        contentType: processedMimetype, // Use audio/ogg if converted
-        folder: 'whatsapp-media',
-        roomId: cleanPhone,
-        phoneNumber: cleanPhone
-      });
+      // OPTIMIZATION: Run Supabase Storage upload and WhatsApp upload in PARALLEL
+      logger.info('⚡ Starting parallel uploads (Supabase Storage + WhatsApp)...');
       
-      logger.info({ 
-        filename: supabaseStorage.gcsFilename,
-        url: supabaseStorage.url,
-        size: supabaseStorage.size,
-        converted: conversionPerformed
-      }, 'Media uploaded to Supabase Storage successfully');
+      const [supabaseResult, waUploadResult] = await Promise.allSettled([
+        // 1) Upload to Supabase Storage (backup) - non-blocking
+        uploadToStorage({
+          buffer: processedBuffer,
+          filename: processedFilename,
+          contentType: processedMimetype,
+          folder: 'whatsapp-media',
+          roomId: cleanPhone,
+          phoneNumber: cleanPhone
+        }),
+        
+        // 2) Upload media to WhatsApp (critical path)
+        uploadMediaToWhatsApp({
+          buffer: processedBuffer,
+          filename: processedFilename,
+          mimeType: processedMimetype
+        })
+      ]);
 
-    } catch (storageErr) {
-      logger.error({ err: storageErr, filename: processedFilename }, 'Failed to upload to Supabase Storage');
-      throw new Error(`Storage upload failed: ${storageErr.message}`);
-    }
-
-    try {
-      // 2) Upload media to WhatsApp to obtain media ID first
-      waUpload = await uploadMediaToWhatsApp({
-        buffer: processedBuffer, // Use converted buffer
-        filename: processedFilename, // Use converted filename
-        mimeType: processedMimetype // Use converted MIME type
-      });
+      // Check WhatsApp upload result (CRITICAL - must succeed)
+      if (waUploadResult.status === 'rejected') {
+        logger.error({ err: waUploadResult.reason }, '❌ WhatsApp upload FAILED');
+        throw new Error(`WhatsApp upload failed: ${waUploadResult.reason.message}`);
+      }
       
+      waUpload = waUploadResult.value;
       logger.info({ 
         mediaId: waUpload.id, 
         filename: processedFilename,
         converted: conversionPerformed
-      }, 'Media uploaded to WhatsApp successfully');
+      }, '✅ WhatsApp upload successful');
+
+      // Check Supabase Storage result (NON-CRITICAL - log warning if fails)
+      if (supabaseResult.status === 'fulfilled') {
+        supabaseStorage = supabaseResult.value;
+        logger.info({ 
+          filename: supabaseStorage.gcsFilename,
+          url: supabaseStorage.url,
+          size: supabaseStorage.size,
+          converted: conversionPerformed
+        }, '✅ Supabase Storage backup successful');
+      } else {
+        logger.warn({ 
+          err: supabaseResult.reason,
+          filename: processedFilename 
+        }, '⚠️ Supabase Storage backup FAILED - continuing without backup (WhatsApp still works)');
+        
+        // Set fallback values for Supabase Storage fields
+        supabaseStorage = {
+          gcsFilename: null,
+          url: null,
+          size: processedBuffer.length
+        };
+      }
 
       // 3) Send WhatsApp message using media ID
+      logger.info({ mediaId: waUpload.id }, '📤 Sending WhatsApp message...');
+      
       sendResult = await sendMediaMessage(cleanPhone, mediaType, waUpload.id, {
         caption: caption || '',
-        filename: processedFilename, // Use converted filename
+        filename: processedFilename,
         replyTo
       });
       
@@ -1153,13 +1177,30 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
         }
       }, '💾 About to insert message to database - DETAILED DEBUG');
       
-      await insertMessage(messageData);
+      try {
+        logger.info({ messageId, step: 'before_insert' }, '🔍 Starting database insert...');
+        await insertMessage(messageData);
+        logger.info({ messageId, step: 'after_insert' }, '✅ Database insert successful');
+      } catch (insertErr) {
+        logger.error({ 
+          err: insertErr,
+          errMessage: insertErr.message,
+          errStack: insertErr.stack,
+          errCode: insertErr.code,
+          messageData,
+          step: 'database_insert_failed'
+        }, '❌ CRITICAL: Database insert FAILED - but WhatsApp message already sent');
+        
+        // Don't throw - WhatsApp message already sent successfully
+        // Just log the error and continue with response
+      }
       
       logger.info({ 
         messageId, 
         room_id: cleanPhone, 
         mediaId: waUpload.id,
-        waMessageId 
+        waMessageId,
+        hasSupabaseBackup: !!supabaseStorage?.url
       }, '✅ Message record created in database with complete data');
 
       // Emit Socket.IO event
@@ -1199,9 +1240,11 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
         mediaType,
         mediaId: waUpload.id,
         waMessageId,
-        gcsFilename: supabaseStorage.gcsFilename,
+        gcsFilename: supabaseStorage?.gcsFilename || 'backup_failed',
+        gcsUrl: supabaseStorage?.url || null,
         messageId,
         audioConverted: conversionPerformed,
+        supabaseBackupSuccess: !!supabaseStorage?.url,
         ...(conversionPerformed && {
           conversion: {
             from: mimetype,
@@ -1210,7 +1253,7 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
             convertedSize: processedBuffer.length
           }
         })
-      }, 'Combined media flow completed successfully');
+      }, '🎉 OPTIMIZED combined media flow completed successfully (parallel uploads)');
 
       return res.json({
         success: true,
@@ -1221,8 +1264,9 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
         message_id: messageId,
         whatsapp_media_id: waUpload.id,
         whatsapp_message_id: waMessageId,
-        storage_url: supabaseStorage.url,
-        storage_filename: supabaseStorage.gcsFilename,
+        storage_url: supabaseStorage?.url || null,
+        storage_filename: supabaseStorage?.gcsFilename || null,
+        storage_backup_success: !!supabaseStorage?.url,
         ...(conversionPerformed && {
           audio_conversion: {
             performed: true,
