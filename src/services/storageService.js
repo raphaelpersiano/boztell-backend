@@ -69,8 +69,8 @@ export async function uploadBuffer({ buffer, filename, contentType, folder = 'me
       bufferType: buffer.constructor.name
     }, 'Starting Supabase Storage upload');
 
-    // Upload to Supabase Storage with proper options
-    const { data, error } = await supabase.storage
+    // Upload to Supabase Storage with timeout (30 seconds)
+    const uploadPromise = supabase.storage
       .from(config.supabase.bucketName)
       .upload(storagePath, buffer, {
         contentType: contentType || 'application/octet-stream',
@@ -82,6 +82,12 @@ export async function uploadBuffer({ buffer, filename, contentType, folder = 'me
           size: buffer.length.toString()
         }
       });
+    
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Supabase Storage upload timeout (30s)')), 30000)
+    );
+    
+    const { data, error } = await Promise.race([uploadPromise, timeoutPromise]);
 
     if (error) {
       logger.error({ 
