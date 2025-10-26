@@ -1047,14 +1047,36 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
         caption: caption || '',
         filename: processedFilename // Use converted filename
       });
+      
+      // CRITICAL: Validate WhatsApp send result
+      if (!sendResult || !sendResult.messages || sendResult.messages.length === 0) {
+        logger.error({ 
+          sendResult,
+          mediaId: waUpload.id,
+          to: cleanPhone,
+          mediaType
+        }, '❌ WhatsApp send failed - no messages in response');
+        throw new Error('WhatsApp send failed: No messages in response');
+      }
+      
       const waMessageId = sendResult.messages?.[0]?.id || null;
+      
+      if (!waMessageId) {
+        logger.error({ 
+          sendResult,
+          mediaId: waUpload.id,
+          to: cleanPhone
+        }, '❌ WhatsApp send failed - no message ID in response');
+        throw new Error('WhatsApp send failed: No message ID returned');
+      }
       
       logger.info({ 
         waMessageId, 
         mediaId: waUpload.id,
         to: cleanPhone,
-        converted: conversionPerformed
-      }, 'WhatsApp message sent successfully');
+        converted: conversionPerformed,
+        sendResultFull: sendResult
+      }, '✅ WhatsApp message sent successfully');
 
       // 4) Create DB row with ALL data at once (optimized - single query)
       messageId = uuidv4();
