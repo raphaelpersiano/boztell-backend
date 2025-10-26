@@ -7,42 +7,54 @@ import { logger } from './logger.js';
 ffmpeg.setFfmpegPath(ffmpegPath.path);
 
 /**
- * Convert audio buffer to OGG format with Opus codec
+ * Convert audio buffer to OGG format with Opus codec (WhatsApp requirement)
+ * 
+ * WhatsApp Audio Requirements:
+ * - Format: OGG container
+ * - Codec: OPUS only (base audio/ogg without OPUS is NOT supported)
+ * - Channels: Mono (1 channel) recommended for voice
+ * - Sample Rate: 48kHz (OPUS standard)
+ * - Bitrate: 128kbps (good quality for voice)
+ * 
  * @param {Buffer} inputBuffer - Input audio buffer (WebM, MP3, WAV, etc.)
  * @param {string} inputFormat - Input format (webm, mp3, wav, etc.)
- * @returns {Promise<Buffer>} - Output OGG buffer with Opus codec
+ * @returns {Promise<Buffer>} - Output OGG buffer with OPUS codec
  */
 export async function convertAudioToOgg(inputBuffer, inputFormat = 'webm') {
   return new Promise((resolve, reject) => {
     try {
       logger.info({ 
         inputSize: inputBuffer.length,
-        inputFormat 
-      }, 'Starting audio conversion to OGG (Opus codec)');
+        inputFormat,
+        targetCodec: 'OPUS',
+        targetFormat: 'OGG'
+      }, '🔄 Starting audio conversion to OGG with OPUS codec (WhatsApp requirement)');
 
       const chunks = [];
       const inputStream = Readable.from(inputBuffer);
       
       ffmpeg(inputStream)
         .inputFormat(inputFormat)
-        .audioCodec('libopus') // Opus codec for OGG
+        .audioCodec('libopus') // ✅ OPUS codec - REQUIRED by WhatsApp for OGG format
         .audioBitrate('128k') // 128kbps - good quality for voice
-        .audioChannels(1) // Mono for voice notes
-        .audioFrequency(48000) // 48kHz sample rate (Opus standard)
+        .audioChannels(1) // Mono - WhatsApp requirement for OGG
+        .audioFrequency(48000) // 48kHz sample rate (OPUS standard)
         .format('ogg')
         .on('start', (commandLine) => {
-          logger.info({ commandLine }, 'FFmpeg conversion started');
+          logger.info({ commandLine }, '▶️ FFmpeg command started (OPUS encoding)');
         })
         .on('progress', (progress) => {
-          logger.debug({ progress }, 'FFmpeg conversion progress');
+          logger.debug({ progress }, '⏳ FFmpeg conversion progress');
         })
         .on('end', () => {
           const outputBuffer = Buffer.concat(chunks);
           logger.info({ 
             inputSize: inputBuffer.length,
             outputSize: outputBuffer.length,
-            compressionRatio: ((1 - outputBuffer.length / inputBuffer.length) * 100).toFixed(2) + '%'
-          }, 'Audio conversion completed successfully');
+            compressionRatio: ((1 - outputBuffer.length / inputBuffer.length) * 100).toFixed(2) + '%',
+            codec: 'OPUS',
+            format: 'OGG'
+          }, '✅ Audio conversion to OGG (OPUS) completed successfully');
           resolve(outputBuffer);
         })
         .on('error', (err, stdout, stderr) => {
@@ -51,9 +63,10 @@ export async function convertAudioToOgg(inputBuffer, inputFormat = 'webm') {
             stdout, 
             stderr,
             inputFormat,
-            inputSize: inputBuffer.length
-          }, 'FFmpeg conversion failed');
-          reject(new Error(`Audio conversion failed: ${err.message}`));
+            inputSize: inputBuffer.length,
+            targetCodec: 'OPUS'
+          }, '❌ FFmpeg conversion to OGG (OPUS) failed');
+          reject(new Error(`Audio conversion to OGG (OPUS codec) failed: ${err.message}`));
         })
         .pipe()
         .on('data', (chunk) => {
@@ -61,7 +74,7 @@ export async function convertAudioToOgg(inputBuffer, inputFormat = 'webm') {
         });
         
     } catch (err) {
-      logger.error({ err }, 'Failed to start audio conversion');
+      logger.error({ err }, '❌ Failed to start audio conversion to OGG (OPUS)');
       reject(err);
     }
   });
@@ -69,18 +82,22 @@ export async function convertAudioToOgg(inputBuffer, inputFormat = 'webm') {
 
 /**
  * Check if audio format needs conversion for WhatsApp
+ * WhatsApp supports: AAC, AMR, MP3/MPEG, MP4, OGG (with OPUS codec only)
  * @param {string} mimeType - Input MIME type
  * @returns {boolean} - True if conversion needed
  */
 export function needsAudioConversion(mimeType) {
+  // WhatsApp natively supported audio formats (NO conversion needed)
   const whatsappSupportedAudio = [
-    'audio/aac',
-    'audio/mp4',
-    'audio/mpeg',
-    'audio/amr',
-    'audio/ogg'
+    'audio/aac',      // AAC - Supported ✅
+    'audio/mp4',      // MP4 audio - Supported ✅
+    'audio/mpeg',     // MP3 - Supported ✅
+    'audio/amr',      // AMR - Supported ✅
+    'audio/ogg'       // OGG (must be OPUS codec) - Supported ✅
   ];
   
+  // Only convert if format is NOT natively supported
+  // Examples that need conversion: audio/webm, audio/wav, audio/flac, etc.
   return !whatsappSupportedAudio.includes(mimeType);
 }
 

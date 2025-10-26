@@ -93,7 +93,22 @@ export async function insertMessage(messageData) {
     .single();
     
   if (error) {
-    throw new Error(`Insert message failed: ${error.message}`);
+    logger.error({ 
+      error,
+      errorCode: error.code,
+      errorMessage: error.message,
+      errorDetails: error.details,
+      errorHint: error.hint,
+      messageData: {
+        id: messageData.id,
+        room_id: messageData.room_id,
+        user_id: messageData.user_id,
+        content_type: messageData.content_type,
+        media_id: messageData.media_id,
+        wa_message_id: messageData.wa_message_id
+      }
+    }, '❌ Supabase insertMessage error - DETAILED');
+    throw new Error(`Insert message failed: ${error.message} (code: ${error.code}, details: ${error.details})`);
   }
   
   return { rows: [data], rowCount: 1 };

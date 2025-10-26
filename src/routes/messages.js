@@ -67,14 +67,21 @@ const upload = multer({
     fileSize: 100 * 1024 * 1024 // 100MB max (WhatsApp limit: 16MB for most, 100MB for documents)
   },
   fileFilter: (req, file, cb) => {
-    // WhatsApp supported media types + audio/webm (will be auto-converted to audio/ogg)
+    // WhatsApp supported media types
+    // Audio formats that need conversion will be auto-converted to OGG with OPUS codec
     const allowedTypes = [
       // Images
       'image/jpeg', 'image/png', 'image/webp',
       // Videos
       'video/mp4', 'video/3gpp',
-      // Audio (audio/webm will be auto-converted to audio/ogg with Opus codec)
-      'audio/aac', 'audio/mp4', 'audio/mpeg', 'audio/amr', 'audio/ogg', 'audio/webm',
+      // Audio - Natively supported by WhatsApp (NO conversion needed):
+      'audio/aac',      // ✅ AAC - Supported
+      'audio/mp4',      // ✅ MP4 audio - Supported
+      'audio/mpeg',     // ✅ MP3 - Supported
+      'audio/amr',      // ✅ AMR - Supported
+      'audio/ogg',      // ✅ OGG (must be OPUS codec) - Supported
+      // Audio - Will be auto-converted to OGG (OPUS codec):
+      'audio/webm',     // 🔄 Will convert to OGG (OPUS)
       // Documents
       'application/pdf', 'application/vnd.ms-powerpoint', 'application/msword',
       'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -86,7 +93,7 @@ const upload = multer({
     if (allowedTypes.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error(`Unsupported media type for WhatsApp: ${file.mimetype}. Supported audio formats: aac, mp4, mpeg, amr, ogg, webm (auto-converted)`), false);
+      cb(new Error(`Unsupported media type: ${file.mimetype}. Supported formats: Images (JPEG, PNG, WebP), Videos (MP4, 3GPP), Audio (AAC, MP4, MP3, AMR, OGG-OPUS, WebM - auto-converted), Documents (PDF, Office files)`), false);
     }
   }
 });
@@ -952,7 +959,7 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
     else if (mimetype.startsWith('audio/')) mediaType = 'audio';
     else mediaType = 'document';
 
-    // Auto-convert unsupported audio formats to OGG (Opus codec)
+    // Auto-convert unsupported audio formats to OGG with OPUS codec (WhatsApp requirement)
     let processedBuffer = buffer;
     let processedMimetype = mimetype;
     let processedFilename = originalname;
@@ -963,7 +970,7 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
         originalFormat: mimetype,
         originalSize: buffer.length,
         filename: originalname
-      }, '🔄 Audio format not supported by WhatsApp - converting to OGG (Opus codec)');
+      }, '🔄 Audio format not supported by WhatsApp - converting to OGG with OPUS codec');
 
       try {
         const ffmpegFormat = getFFmpegFormat(mimetype);
@@ -975,20 +982,20 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
         logger.info({ 
           originalFormat: mimetype,
           originalSize: buffer.length,
-          convertedFormat: processedMimetype,
+          convertedFormat: 'audio/ogg (OPUS codec)',
           convertedSize: processedBuffer.length,
           compressionRatio: ((1 - processedBuffer.length / buffer.length) * 100).toFixed(2) + '%',
           newFilename: processedFilename
-        }, '✅ Audio conversion successful');
+        }, '✅ Audio conversion to OGG (OPUS codec) successful');
 
       } catch (conversionErr) {
         logger.error({ 
           err: conversionErr, 
           mimetype, 
           filename: originalname 
-        }, '❌ Audio conversion failed - rejecting upload');
+        }, '❌ Audio conversion to OGG (OPUS codec) failed - rejecting upload');
         
-        throw new Error(`Audio conversion failed: ${conversionErr.message}. Original format: ${mimetype}`);
+        throw new Error(`Audio conversion to OGG (OPUS codec) failed: ${conversionErr.message}. Original format: ${mimetype}`);
       }
     }
 
