@@ -672,9 +672,9 @@ router.post('/send-media', async (req, res) => {
       reply_to_wa_message_id: null,
       reaction_emoji: null,
       reaction_to_wa_message_id: null,
-      metadata: { 
-        direction: 'outgoing', 
-        source: 'api', 
+      metadata: {
+        direction: 'outgoing',
+        source: 'api',
         type: 'media',
         media_source: mediaId ? 'whatsapp_media_id' : 'url'
       },
@@ -832,9 +832,9 @@ router.post('/send-media-file', upload.single('media'), async (req, res) => {
       reply_to_wa_message_id: null,
       reaction_emoji: null,
       reaction_to_wa_message_id: null,
-      metadata: { 
-        direction: 'outgoing', 
-        source: 'api', 
+      metadata: {
+        direction: 'outgoing',
+        source: 'api',
         type: 'media',
         upload_method: 'send-media-file'
       },
@@ -1087,9 +1087,10 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
 
       // 4) Create DB row with ALL data at once (optimized - single query)
       messageId = uuidv4();
-      const metadata = { 
-        direction: 'outgoing', 
-        source: 'api', 
+      
+      const metadata = {
+        direction: 'outgoing',
+        source: 'api',
         filename: originalname,
         upload_step: 'complete',
         whatsapp_media_id: waUpload.id,
@@ -1105,6 +1106,7 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
           }
         })
       };
+      
       const storedName = (supabaseStorage.gcsFilename || '').split('/').pop() || processedFilename;
       
       const messageData = {
@@ -1514,7 +1516,7 @@ router.post('/send-template', async (req, res) => {
       file_size: null,
       mime_type: null,
       original_filename: null,
-      wa_message_id: waMessageId, // Insert with WhatsApp message ID
+      wa_message_id: waMessageId,
       reply_to_wa_message_id: null,
       reaction_emoji: null,
       reaction_to_wa_message_id: null,
