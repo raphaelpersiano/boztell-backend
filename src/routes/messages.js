@@ -1118,7 +1118,7 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
         room_id: mediaRoomId,
         user_id: validatedUserId,
         content_type: 'media',
-        content_text: caption || '',
+        content_text: caption || null,
         media_type: mediaType,
         media_id: waUpload.id, // Already have media ID
         gcs_filename: supabaseStorage.gcsFilename,
@@ -1127,11 +1127,11 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
         mime_type: processedMimetype, // Store converted MIME type
         original_filename: storedName,
         wa_message_id: waMessageId, // Already have message ID
-        status: '', // Empty string like webhook messages
-        status_timestamp: '', // Empty string like webhook messages
-        reply_to_wa_message_id: replyTo || '', // Use replyTo or empty string
-        reaction_emoji: '', // Empty string instead of null
-        reaction_to_wa_message_id: '', // Empty string instead of null
+        status: null,
+        status_timestamp: null,
+        reply_to_wa_message_id: replyTo || null,
+        reaction_emoji: null,
+        reaction_to_wa_message_id: null,
         metadata: metadata,
         created_at: new Date().toISOString()
       };
