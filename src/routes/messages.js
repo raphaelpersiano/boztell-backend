@@ -72,8 +72,8 @@ const upload = multer({
       'image/jpeg', 'image/png', 'image/webp',
       // Videos
       'video/mp4', 'video/3gpp',
-      // Audio
-      'audio/aac', 'audio/mp4', 'audio/mpeg', 'audio/amr', 'audio/ogg', 'audio/webm',
+      // Audio (WhatsApp Cloud API does NOT support audio/webm - frontend must convert to audio/ogg or audio/mp4)
+      'audio/aac', 'audio/mp4', 'audio/mpeg', 'audio/amr', 'audio/ogg',
       // Documents
       'application/pdf', 'application/vnd.ms-powerpoint', 'application/msword',
       'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -85,7 +85,12 @@ const upload = multer({
     if (allowedTypes.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error(`Unsupported media type for WhatsApp: ${file.mimetype}`), false);
+      // Provide helpful error message for common unsupported formats
+      if (file.mimetype === 'audio/webm') {
+        cb(new Error('WhatsApp does not support audio/webm format. Please convert to audio/ogg (recommended) or audio/mp4 before uploading.'), false);
+      } else {
+        cb(new Error(`Unsupported media type for WhatsApp: ${file.mimetype}. Supported audio formats: aac, mp4, mpeg, amr, ogg`), false);
+      }
     }
   }
 });
