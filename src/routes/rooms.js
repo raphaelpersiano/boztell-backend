@@ -84,6 +84,7 @@ router.get('/:roomId', async (req, res) => {
       title: room.room_title || 'Personal',
       created_at: room.room_created_at,
       updated_at: room.room_updated_at,
+      leads_id: room.leads_id || null,
       leads_info: room.leads_info ? {
         id: room.leads_info.id,
         utm_id: room.leads_info.utm_id,
