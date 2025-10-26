@@ -73,7 +73,7 @@ const upload = multer({
       // Videos
       'video/mp4', 'video/3gpp',
       // Audio
-      'audio/aac', 'audio/mp4', 'audio/mpeg', 'audio/amr', 'audio/ogg',
+      'audio/aac', 'audio/mp4', 'audio/mpeg', 'audio/amr', 'audio/ogg', 'audio/webm',
       // Documents
       'application/pdf', 'application/vnd.ms-powerpoint', 'application/msword',
       'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
