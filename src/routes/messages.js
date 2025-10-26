@@ -1446,6 +1446,14 @@ router.get('/debug/:waMessageId', async (req, res) => {
 /**
  * Send template message (recommended for new contacts)
  * POST /messages/send-template
+ * 
+ * Template messages are used to:
+ * 1. Initiate conversation with NEW customers (room_id empty/null)
+ * 2. Send to EXISTING customers (room_id provided)
+ * 
+ * room_id behavior:
+ * - If provided → Use existing room
+ * - If empty/null → Create new room (customer baru)
  */
 router.post('/send-template', async (req, res) => {
   try {
@@ -1463,7 +1471,7 @@ router.post('/send-template', async (req, res) => {
     if (!user_id) {
       return res.status(400).json({ 
         error: 'user_id is REQUIRED for template messages. Only agents/admin can send templates, never customers.',
-        required_fields: ['to', 'templateName', 'languageCode', 'room_id', 'user_id'],
+        required_fields: ['to', 'templateName', 'languageCode', 'user_id'],
         note: 'Template messages are business-initiated conversations that can only be sent by your team.'
       });
     }
@@ -1471,29 +1479,32 @@ router.post('/send-template', async (req, res) => {
     // Validate user_id 
     const validatedUserId = await validateUserId(user_id, true);
     
-    if (!to || !templateName || !languageCode || !room_id) {
+    if (!to || !templateName || !languageCode) {
       return res.status(400).json({ 
-        error: 'Missing required fields: to, templateName, languageCode, room_id, user_id',
-        note: 'user_id is REQUIRED - only agents/admin can send templates',
+        error: 'Missing required fields: to, templateName, languageCode, user_id',
+        note: 'room_id is OPTIONAL - if empty, backend will create new room for new customer',
         examples: {
-          basic: {
+          new_customer: {
             to: '6287879565390',
             templateName: 'hello_world',
             languageCode: 'en_US',
-            user_id: 'agent-001'
+            user_id: 'agent-001',
+            room_id: null // Backend akan buatkan room baru
           },
-          indonesian: {
+          existing_customer: {
             to: '6287879565390',
             templateName: 'hello_world',
-            languageCode: 'id_ID',
-            user_id: 'admin-001'
+            languageCode: 'en_US',
+            user_id: 'agent-001',
+            room_id: 'existing-room-uuid-123' // Pakai room yang sudah ada
           },
           with_parameters: {
             to: '6287879565390',
             templateName: 'welcome_message',
             languageCode: 'en_US',
             parameters: ['John Doe', 'Premium Package', '2024'],
-            user_id: 'supervisor-001'
+            user_id: 'supervisor-001',
+            room_id: null // Opsional
           },
           explanation: 'Parameters will replace {{1}}, {{2}}, {{3}} etc. in your template. languageCode must match what you registered in Meta Business Manager.'
         }
@@ -1502,8 +1513,25 @@ router.post('/send-template', async (req, res) => {
     
     const cleanPhone = validateWhatsAppPhoneNumber(to);
     
-    // Use room_id from frontend directly
-    const templateFullRoomId = room_id;
+    // Handle room_id: Use provided OR create new room for new customer
+    let templateFullRoomId;
+    if (room_id) {
+      // Use existing room from frontend
+      templateFullRoomId = room_id;
+      logger.info({ room_id, to: cleanPhone }, '📦 Using existing room_id from frontend');
+    } else {
+      // Create new room for new customer
+      templateFullRoomId = await ensureRoomAndGetId(cleanPhone, { 
+        phone: cleanPhone,
+        source: 'template_message',
+        template_name: templateName
+      });
+      logger.info({ 
+        room_id: templateFullRoomId, 
+        to: cleanPhone,
+        templateName 
+      }, '🆕 Created new room for new customer (template message)');
+    }
 
     // Send template message first
     let result;
