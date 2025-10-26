@@ -141,20 +141,20 @@ async function ensureRoomAndGetId(phone, metadata = {}) {
  */
 router.post('/send', async (req, res) => {
   try {
-    const { to, text, user_id, ...options } = req.body;
+    const { to, text, room_id, user_id, ...options } = req.body;
     
     // REQUIRED: Validate user_id for all outgoing messages
     if (!user_id) {
       return res.status(400).json({ 
         error: 'user_id is required for all outgoing messages. Only agents/admin can send messages.',
-        required_fields: ['to', 'text', 'user_id']
+        required_fields: ['to', 'text', 'room_id', 'user_id']
       });
     }
     const validatedUserId = await validateUserId(user_id, true);
     
-    if (!to || !text) {
+    if (!to || !text || !room_id) {
       return res.status(400).json({ 
-        error: 'Missing required fields: to, text' 
+        error: 'Missing required fields: to, text, room_id' 
       });
     }
     
@@ -169,8 +169,8 @@ router.post('/send', async (req, res) => {
       else if (typeof ctx === 'object' && ctx.message_id) replyTo = ctx.message_id;
     }
     
-    // Ensure room exists (1 room = 1 phone number)
-    const textRoom = await ensureRoom(cleanPhone, { phone: cleanPhone });
+    // Use room_id from frontend directly
+    const roomId = room_id;
 
     // 1) Send to WhatsApp first to get message ID
     let result;
@@ -191,7 +191,7 @@ router.post('/send', async (req, res) => {
     
     const messageData = {
       id: messageId,
-      room_id: textRoom.id,
+      room_id: roomId,
       user_id: validatedUserId,
       content_type: 'text',
       content_text: text,
@@ -221,7 +221,7 @@ router.post('/send', async (req, res) => {
     if (io) {
       const messagePayload = {
         id: messageId,
-        room_id: textRoom.id,
+        room_id: roomId,
         user_id: validatedUserId,
         content_type: 'text',
         content_text: text,
@@ -244,12 +244,12 @@ router.post('/send', async (req, res) => {
       };
       
       // Emit message object directly (not wrapped)
-      io.to(`room:${textRoom.id}`).emit('room:new_message', messagePayload);
+      io.to(`room:${roomId}`).emit('room:new_message', messagePayload);
       io.emit('new_message', messagePayload);
       
       logger.info({ 
         messageId, 
-        roomId: textRoom.id,
+        roomId: roomId,
         userId: validatedUserId,
         hasId: !!messagePayload.id,
         payloadKeys: Object.keys(messagePayload)
@@ -282,25 +282,25 @@ router.post('/send', async (req, res) => {
 /**
  * Send contacts message
  * POST /messages/send-contacts
- * body: { to, contacts: [...], replyTo?, user_id?, sender_name? }
+ * body: { to, contacts: [...], room_id, replyTo?, user_id?, sender_name? }
  */
 router.post('/send-contacts', async (req, res) => {
   try {
-    const { to, contacts, replyTo, user_id } = req.body;
+    const { to, contacts, room_id, replyTo, user_id } = req.body;
     
     // REQUIRED: Validate user_id for all outgoing messages
     if (!user_id) {
       return res.status(400).json({ 
         error: 'user_id is required for all outgoing messages. Only agents/admin can send contacts.',
-        required_fields: ['to', 'contacts', 'user_id']
+        required_fields: ['to', 'contacts', 'room_id', 'user_id']
       });
     }
     const validatedUserId = await validateUserId(user_id, true);
-    if (!to || !Array.isArray(contacts) || contacts.length === 0) {
-      return res.status(400).json({ error: 'to and contacts[] required' });
+    if (!to || !Array.isArray(contacts) || contacts.length === 0 || !room_id) {
+      return res.status(400).json({ error: 'to, room_id and contacts[] required' });
     }
     const cleanPhone = validateWhatsAppPhoneNumber(to);
-    const contactsRoomId = await ensureRoomAndGetId(cleanPhone);
+    const contactsRoomId = room_id;
 
     // 1) Send to WhatsApp first to get message ID
     let result;
@@ -389,25 +389,25 @@ router.post('/send-contacts', async (req, res) => {
 /**
  * Send location message
  * POST /messages/send-location
- * body: { to, location: { latitude, longitude, name?, address? }, replyTo?, user_id?, sender_name? }
+ * body: { to, location: { latitude, longitude, name?, address? }, room_id, replyTo?, user_id?, sender_name? }
  */
 router.post('/send-location', async (req, res) => {
   try {
-    const { to, location, replyTo, user_id } = req.body;
+    const { to, location, room_id, replyTo, user_id } = req.body;
     
     // REQUIRED: Validate user_id for all outgoing messages
     if (!user_id) {
       return res.status(400).json({ 
         error: 'user_id is required for all outgoing messages. Only agents/admin can send location.',
-        required_fields: ['to', 'location', 'user_id']
+        required_fields: ['to', 'location', 'room_id', 'user_id']
       });
     }
     const validatedUserId = await validateUserId(user_id, true);
-    if (!to || !location || typeof location.latitude !== 'number' || typeof location.longitude !== 'number') {
-      return res.status(400).json({ error: 'to and location.latitude/longitude required' });
+    if (!to || !location || typeof location.latitude !== 'number' || typeof location.longitude !== 'number' || !room_id) {
+      return res.status(400).json({ error: 'to, room_id and location.latitude/longitude required' });
     }
     const cleanPhone = validateWhatsAppPhoneNumber(to);
-    const locationRoomId = await ensureRoomAndGetId(cleanPhone);
+    const locationRoomId = room_id;
 
     // 1) Send to WhatsApp first to get message ID
     let result;
@@ -496,25 +496,25 @@ router.post('/send-location', async (req, res) => {
 /**
  * Send reaction to a message
  * POST /messages/send-reaction
- * body: { to, message_id, emoji }
+ * body: { to, message_id, emoji, room_id }
  */
 router.post('/send-reaction', async (req, res) => {
   try {
-    const { to, message_id, emoji, user_id } = req.body;
+    const { to, message_id, emoji, room_id, user_id } = req.body;
     
     // REQUIRED: Validate user_id for all outgoing messages
     if (!user_id) {
       return res.status(400).json({ 
         error: 'user_id is required for all outgoing messages. Only agents/admin can send reactions.',
-        required_fields: ['to', 'message_id', 'emoji', 'user_id']
+        required_fields: ['to', 'message_id', 'emoji', 'room_id', 'user_id']
       });
     }
     const validatedUserId = await validateUserId(user_id, true);
-    if (!to || !message_id || !emoji) {
-      return res.status(400).json({ error: 'to, message_id, and emoji are required' });
+    if (!to || !message_id || !emoji || !room_id) {
+      return res.status(400).json({ error: 'to, message_id, emoji, and room_id are required' });
     }
     const cleanPhone = validateWhatsAppPhoneNumber(to);
-    const reactionRoomId = await ensureRoomAndGetId(cleanPhone);
+    const reactionRoomId = room_id;
 
     // 1) Send to WhatsApp first to get message ID
     let result;
@@ -605,22 +605,22 @@ router.post('/send-reaction', async (req, res) => {
  */
 router.post('/send-media', async (req, res) => {
   try {
-    const { to, mediaType, mediaId, mediaUrl, caption, filename, replyTo, user_id } = req.body;
+    const { to, mediaType, mediaId, mediaUrl, caption, filename, room_id, replyTo, user_id } = req.body;
     
     // REQUIRED: user_id for all outgoing messages
     if (!user_id) {
       return res.status(400).json({ 
         error: 'user_id is required for all outgoing messages. Only agents/admin can send media.',
-        required_fields: ['to', 'mediaType', 'user_id']
+        required_fields: ['to', 'mediaType', 'room_id', 'user_id']
       });
     }
     
     // Validate user_id
     const validatedUserId = await validateUserId(user_id, true);
     
-    if (!to || !mediaType) {
+    if (!to || !mediaType || !room_id) {
       return res.status(400).json({ 
-        error: 'Missing required fields: to, mediaType, user_id' 
+        error: 'Missing required fields: to, mediaType, room_id, user_id' 
       });
     }
     
@@ -632,8 +632,8 @@ router.post('/send-media', async (req, res) => {
     
     const cleanPhone = validateWhatsAppPhoneNumber(to);
     
-    // Ensure room exists
-    const mediaRoom = await ensureRoom(cleanPhone, { phone: cleanPhone });
+    // Use room_id from frontend directly
+    const roomId = room_id;
     
     let result;
     
@@ -659,7 +659,7 @@ router.post('/send-media', async (req, res) => {
     const messageId = uuidv4();
     const messageData = {
       id: messageId,
-      room_id: mediaRoom.id,
+      room_id: roomId,
       user_id: validatedUserId,
       content_type: 'media',
       content_text: caption || null,
@@ -685,7 +685,7 @@ router.post('/send-media', async (req, res) => {
     
     try {
       await insertMessage(messageData);
-      logger.info({ messageId, waMessageId, roomId: mediaRoom.id }, 'Media message saved to database');
+      logger.info({ messageId, waMessageId, roomId: roomId }, 'Media message saved to database');
     } catch (insertErr) {
       logger.error({ err: insertErr, messageId, waMessageId }, 'Failed to insert media message to database (message already sent to WhatsApp)');
     }
@@ -694,7 +694,7 @@ router.post('/send-media', async (req, res) => {
     if (io) {
       const messagePayload = {
         id: messageId,
-        room_id: mediaRoom.id,
+        room_id: roomId,
         user_id: validatedUserId,
         content_type: 'media',
         content_text: caption || null,
@@ -716,10 +716,10 @@ router.post('/send-media', async (req, res) => {
         updated_at: messageData.created_at
       };
       
-      io.to(`room:${mediaRoom.id}`).emit('room:new_message', messagePayload);
+      io.to(`room:${roomId}`).emit('room:new_message', messagePayload);
       io.emit('new_message', messagePayload);
       
-      logger.info({ messageId, roomId: mediaRoom.id }, '📡 Emitting new_message events for media');
+      logger.info({ messageId, roomId: roomId }, '📡 Emitting new_message events for media');
     }
     
     logger.info({ 
@@ -762,18 +762,18 @@ router.post('/send-media', async (req, res) => {
  */
 router.post('/send-media-file', upload.single('media'), async (req, res) => {
   try {
-    const { to, caption, replyTo, user_id } = req.body;
+    const { to, caption, room_id, replyTo, user_id } = req.body;
     
     // REQUIRED: Validate user_id for all outgoing messages
     if (!user_id) {
       return res.status(400).json({ 
         error: 'user_id is required for all outgoing messages. Only agents/admin can send media.',
-        required_fields: ['to', 'media', 'user_id']
+        required_fields: ['to', 'media', 'room_id', 'user_id']
       });
     }
     
-    if (!to) {
-      return res.status(400).json({ error: 'Phone number (to) required' });
+    if (!to || !room_id) {
+      return res.status(400).json({ error: 'Phone number (to) and room_id required' });
     }
     
     if (!req.file) {
@@ -797,8 +797,8 @@ router.post('/send-media-file', upload.single('media'), async (req, res) => {
       mediaType = 'document';
     }
     
-    // Ensure room exists
-    const mediaFileRoom = await ensureRoom(cleanPhone, { phone: cleanPhone });
+    // Use room_id from frontend directly
+    const roomId = room_id;
     
     // 1. Upload media to WhatsApp
     const uploadResult = await uploadMediaToWhatsApp({
@@ -820,7 +820,7 @@ router.post('/send-media-file', upload.single('media'), async (req, res) => {
     const mediaMessageId = uuidv4();
     const mediaMessageData = {
       id: mediaMessageId,
-      room_id: mediaFileRoom.id,
+      room_id: roomId,
       user_id: validatedUserId,
       content_type: 'media',
       content_text: caption || null,
@@ -846,7 +846,7 @@ router.post('/send-media-file', upload.single('media'), async (req, res) => {
     
     try {
       await insertMessage(mediaMessageData);
-      logger.info({ messageId: mediaMessageId, waMessageId, roomId: mediaFileRoom.id }, 'Media message saved to database');
+      logger.info({ messageId: mediaMessageId, waMessageId, roomId: roomId }, 'Media message saved to database');
     } catch (insertErr) {
       logger.error({ err: insertErr, messageId: mediaMessageId, waMessageId }, 'Failed to insert media message to database (message already sent to WhatsApp)');
     }
@@ -855,7 +855,7 @@ router.post('/send-media-file', upload.single('media'), async (req, res) => {
     if (io) {
       const messagePayload = {
         id: mediaMessageId,
-        room_id: mediaFileRoom.id,
+        room_id: roomId,
         user_id: validatedUserId,
         content_type: 'media',
         content_text: caption || null,
@@ -877,10 +877,10 @@ router.post('/send-media-file', upload.single('media'), async (req, res) => {
         updated_at: mediaMessageData.created_at
       };
       
-      io.to(`room:${mediaFileRoom.id}`).emit('room:new_message', messagePayload);
+      io.to(`room:${roomId}`).emit('room:new_message', messagePayload);
       io.emit('new_message', messagePayload);
       
-      logger.info({ messageId: mediaMessageId, roomId: mediaFileRoom.id }, '📡 Emitting new_message events for media file');
+      logger.info({ messageId: mediaMessageId, roomId: roomId }, '📡 Emitting new_message events for media file');
     }
     
     logger.info({ 
@@ -922,7 +922,7 @@ router.post('/send-media-file', upload.single('media'), async (req, res) => {
 /**
  * Combined flow: upload to Supabase Storage + persist DB + upload to WhatsApp + send to WhatsApp
  * POST /messages/send-media-combined
- * Form fields: media (file), to (phone), caption (optional), user_id (required)
+ * Form fields: media (file), to (phone), room_id (required), caption (optional), user_id (required)
  * 
  * Caption Support by Media Type:
  * - Image: ✅ Caption supported natively by WhatsApp
@@ -932,21 +932,21 @@ router.post('/send-media-file', upload.single('media'), async (req, res) => {
  */
 router.post('/send-media-combined', upload.single('media'), async (req, res) => {
   try {
-    const { to, caption = '', replyTo, user_id } = req.body;
+    const { to, caption = '', room_id, replyTo, user_id } = req.body;
     
     // REQUIRED: Validate user_id for all outgoing messages
     if (!user_id) {
       return res.status(400).json({ 
         error: 'user_id is required for all outgoing messages. Only agents/admin can send media.',
-        required_fields: ['to', 'media', 'user_id']
+        required_fields: ['to', 'media', 'room_id', 'user_id']
       });
     }
     
     // Validate user_id and other required fields
     const validatedUserId = await validateUserId(user_id, true);
 
-    if (!to) {
-      return res.status(400).json({ error: 'Phone number (to) required' });
+    if (!to || !room_id) {
+      return res.status(400).json({ error: 'Phone number (to) and room_id required' });
     }
     if (!req.file) {
       return res.status(400).json({ error: 'Media file required (field name: media)' });
@@ -1002,8 +1002,8 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
       }
     }
 
-    // Ensure room exists (1 room = 1 phone number)
-    const mediaRoomId = await ensureRoomAndGetId(cleanPhone);
+    // Use room_id from frontend directly
+    const mediaRoomId = room_id;
     
     logger.info({ 
       to: cleanPhone, 
@@ -1410,6 +1410,7 @@ router.post('/send-template', async (req, res) => {
       templateName, 
       languageCode, 
       parameters = [],
+      room_id,
       replyTo,
       user_id
     } = req.body;
@@ -1418,7 +1419,7 @@ router.post('/send-template', async (req, res) => {
     if (!user_id) {
       return res.status(400).json({ 
         error: 'user_id is REQUIRED for template messages. Only agents/admin can send templates, never customers.',
-        required_fields: ['to', 'templateName', 'languageCode', 'user_id'],
+        required_fields: ['to', 'templateName', 'languageCode', 'room_id', 'user_id'],
         note: 'Template messages are business-initiated conversations that can only be sent by your team.'
       });
     }
@@ -1426,9 +1427,9 @@ router.post('/send-template', async (req, res) => {
     // Validate user_id 
     const validatedUserId = await validateUserId(user_id, true);
     
-    if (!to || !templateName || !languageCode) {
+    if (!to || !templateName || !languageCode || !room_id) {
       return res.status(400).json({ 
-        error: 'Missing required fields: to, templateName, languageCode, user_id',
+        error: 'Missing required fields: to, templateName, languageCode, room_id, user_id',
         note: 'user_id is REQUIRED - only agents/admin can send templates',
         examples: {
           basic: {
@@ -1457,8 +1458,8 @@ router.post('/send-template', async (req, res) => {
     
     const cleanPhone = validateWhatsAppPhoneNumber(to);
     
-    // Ensure room exists
-    const templateFullRoomId = await ensureRoomAndGetId(cleanPhone);
+    // Use room_id from frontend directly
+    const templateFullRoomId = room_id;
 
     // Send template message first
     let result;
