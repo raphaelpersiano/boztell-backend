@@ -605,7 +605,7 @@ router.post('/send-reaction', async (req, res) => {
  */
 router.post('/send-media', async (req, res) => {
   try {
-    const { to, mediaType, mediaId, mediaUrl, caption, filename, user_id } = req.body;
+    const { to, mediaType, mediaId, mediaUrl, caption, filename, replyTo, user_id } = req.body;
     
     // REQUIRED: user_id for all outgoing messages
     if (!user_id) {
@@ -641,13 +641,15 @@ router.post('/send-media', async (req, res) => {
       // Send using WhatsApp media ID
       result = await sendMediaMessage(cleanPhone, mediaType, mediaId, {
         caption,
-        filename
+        filename,
+        replyTo
       });
     } else {
       // Send using URL
       result = await sendMediaByUrl(cleanPhone, mediaType, mediaUrl, {
         caption,
-        filename
+        filename,
+        replyTo
       });
     }
     
@@ -669,7 +671,7 @@ router.post('/send-media', async (req, res) => {
       mime_type: null,
       original_filename: filename || null,
       wa_message_id: waMessageId,
-      reply_to_wa_message_id: null,
+      reply_to_wa_message_id: replyTo || null,
       reaction_emoji: null,
       reaction_to_wa_message_id: null,
       metadata: {
@@ -706,7 +708,7 @@ router.post('/send-media', async (req, res) => {
         wa_message_id: waMessageId,
         status: 'sent',
         status_timestamp: messageData.created_at,
-        reply_to_wa_message_id: null,
+        reply_to_wa_message_id: replyTo || null,
         reaction_emoji: null,
         reaction_to_wa_message_id: null,
         metadata: messageData.metadata,
@@ -760,7 +762,7 @@ router.post('/send-media', async (req, res) => {
  */
 router.post('/send-media-file', upload.single('media'), async (req, res) => {
   try {
-    const { to, caption, user_id } = req.body;
+    const { to, caption, replyTo, user_id } = req.body;
     
     // REQUIRED: Validate user_id for all outgoing messages
     if (!user_id) {
@@ -808,7 +810,8 @@ router.post('/send-media-file', upload.single('media'), async (req, res) => {
     // 2. Send media message
     const sendResult = await sendMediaMessage(cleanPhone, mediaType, uploadResult.id, {
       caption,
-      filename: originalname
+      filename: originalname,
+      replyTo
     });
     
     const waMessageId = sendResult.messages?.[0]?.id || null;
@@ -829,7 +832,7 @@ router.post('/send-media-file', upload.single('media'), async (req, res) => {
       mime_type: mimetype,
       original_filename: originalname,
       wa_message_id: waMessageId,
-      reply_to_wa_message_id: null,
+      reply_to_wa_message_id: replyTo || null,
       reaction_emoji: null,
       reaction_to_wa_message_id: null,
       metadata: {
@@ -866,7 +869,7 @@ router.post('/send-media-file', upload.single('media'), async (req, res) => {
         wa_message_id: waMessageId,
         status: 'sent',
         status_timestamp: mediaMessageData.created_at,
-        reply_to_wa_message_id: null,
+        reply_to_wa_message_id: replyTo || null,
         reaction_emoji: null,
         reaction_to_wa_message_id: null,
         metadata: mediaMessageData.metadata,
@@ -929,7 +932,7 @@ router.post('/send-media-file', upload.single('media'), async (req, res) => {
  */
 router.post('/send-media-combined', upload.single('media'), async (req, res) => {
   try {
-    const { to, caption = '', user_id } = req.body;
+    const { to, caption = '', replyTo, user_id } = req.body;
     
     // REQUIRED: Validate user_id for all outgoing messages
     if (!user_id) {
@@ -1052,7 +1055,8 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
       // 3) Send WhatsApp message using media ID
       sendResult = await sendMediaMessage(cleanPhone, mediaType, waUpload.id, {
         caption: caption || '',
-        filename: processedFilename // Use converted filename
+        filename: processedFilename, // Use converted filename
+        replyTo
       });
       
       // CRITICAL: Validate WhatsApp send result
@@ -1125,7 +1129,7 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
         wa_message_id: waMessageId, // Already have message ID
         status: '', // Empty string like webhook messages
         status_timestamp: '', // Empty string like webhook messages
-        reply_to_wa_message_id: '', // Empty string instead of null
+        reply_to_wa_message_id: replyTo || '', // Use replyTo or empty string
         reaction_emoji: '', // Empty string instead of null
         reaction_to_wa_message_id: '', // Empty string instead of null
         metadata: metadata,
@@ -1176,7 +1180,7 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
           wa_message_id: waMessageId,
           status: 'sent',
           status_timestamp: messageData.created_at,
-          reply_to_wa_message_id: null,
+          reply_to_wa_message_id: replyTo || null,
           reaction_emoji: null,
           reaction_to_wa_message_id: null,
           metadata: metadata,
@@ -1406,6 +1410,7 @@ router.post('/send-template', async (req, res) => {
       templateName, 
       languageCode, 
       parameters = [],
+      replyTo,
       user_id
     } = req.body;
     
@@ -1458,7 +1463,7 @@ router.post('/send-template', async (req, res) => {
     // Send template message first
     let result;
     try {
-      result = await sendTemplateMessage(cleanPhone, templateName, languageCode, parameters);
+      result = await sendTemplateMessage(cleanPhone, templateName, languageCode, parameters, { replyTo });
       logger.info({ 
         templateName,
         fullResult: result,
@@ -1517,7 +1522,7 @@ router.post('/send-template', async (req, res) => {
       mime_type: null,
       original_filename: null,
       wa_message_id: waMessageId,
-      reply_to_wa_message_id: null,
+      reply_to_wa_message_id: replyTo || null,
       reaction_emoji: null,
       reaction_to_wa_message_id: null,
       metadata: templateMeta,
@@ -1567,7 +1572,7 @@ router.post('/send-template', async (req, res) => {
         wa_message_id: waMessageId || null,
         status: 'sent',
         status_timestamp: messageData.created_at,
-        reply_to_wa_message_id: null,
+        reply_to_wa_message_id: replyTo || null,
         reaction_emoji: null,
         reaction_to_wa_message_id: null,
         media_type: null,
