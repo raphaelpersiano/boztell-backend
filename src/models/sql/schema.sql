@@ -11,8 +11,8 @@ CREATE TABLE IF NOT EXISTS rooms (
 CREATE TABLE IF NOT EXISTS messages (
   id TEXT PRIMARY KEY,
   room_id TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
-  sender_id TEXT NOT NULL,
-  sender TEXT,
+  user_id TEXT NOT NULL, -- Changed from sender_id to align with application code
+  sender TEXT, -- Display name (optional)
   content_type TEXT NOT NULL, -- 'text', 'media', 'location', 'contacts', 'interactive', etc.
   content_text TEXT,
   

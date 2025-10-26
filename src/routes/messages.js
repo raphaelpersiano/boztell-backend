@@ -1092,14 +1092,31 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
         mime_type: processedMimetype, // Store converted MIME type
         original_filename: storedName,
         wa_message_id: waMessageId, // Already have message ID
-        reply_to_wa_message_id: null,
-        reaction_emoji: null,
-        reaction_to_wa_message_id: null,
+        status: '', // Empty string like webhook messages
+        status_timestamp: '', // Empty string like webhook messages
+        reply_to_wa_message_id: '', // Empty string instead of null
+        reaction_emoji: '', // Empty string instead of null
+        reaction_to_wa_message_id: '', // Empty string instead of null
         metadata: metadata,
         created_at: new Date().toISOString()
       };
       
-      logger.info({ messageData }, '💾 About to insert message to database');
+      logger.info({ 
+        messageData,
+        fieldTypes: {
+          id: typeof messageData.id,
+          room_id: typeof messageData.room_id,
+          user_id: typeof messageData.user_id,
+          content_type: typeof messageData.content_type,
+          content_text: typeof messageData.content_text,
+          media_type: typeof messageData.media_type,
+          media_id: typeof messageData.media_id,
+          wa_message_id: typeof messageData.wa_message_id,
+          metadata: typeof messageData.metadata,
+          metadataIsObject: messageData.metadata !== null && typeof messageData.metadata === 'object',
+          metadataKeys: messageData.metadata ? Object.keys(messageData.metadata) : null
+        }
+      }, '💾 About to insert message to database - DETAILED DEBUG');
       
       await insertMessage(messageData);
       
