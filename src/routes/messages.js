@@ -1429,6 +1429,43 @@ router.post('/send-template', async (req, res) => {
       // Don't throw error here since WhatsApp message was sent successfully
     }
 
+    // Emit Socket.IO event for template message
+    if (io) {
+      const messagePayload = {
+        id: messageId,
+        room_id: templateFullRoomId,
+        user_id: validatedUserId,
+        content_type: 'template',
+        content_text: `Template: ${templateName}${parameters.length > 0 ? ` (${parameters.join(', ')})` : ''}`,
+        wa_message_id: waMessageId || null,
+        status: 'sent',
+        status_timestamp: messageData.created_at,
+        reply_to_wa_message_id: null,
+        reaction_emoji: null,
+        reaction_to_wa_message_id: null,
+        media_type: null,
+        media_id: null,
+        gcs_filename: null,
+        gcs_url: null,
+        file_size: null,
+        mime_type: null,
+        original_filename: null,
+        metadata: templateMeta,
+        created_at: messageData.created_at,
+        updated_at: messageData.created_at
+      };
+      
+      io.to(`room:${templateFullRoomId}`).emit('room:new_message', messagePayload);
+      io.emit('new_message', messagePayload);
+      
+      logger.info({ 
+        messageId, 
+        roomId: templateFullRoomId,
+        templateName,
+        userId: validatedUserId
+      }, '📡 Emitting new_message events for template message');
+    }
+
     logger.info({ 
       to: cleanPhone, 
       templateName, 
