@@ -8,6 +8,7 @@ import { ensureRoom } from '../services/roomService.js';
 import { insertMessage, updateMessage } from '../db.js';
 import { getUserForMessage } from '../services/userService.js';
 import { logger } from '../utils/logger.js';
+import { convertAudioToOgg, needsAudioConversion, getFFmpegFormat } from '../utils/audioConverter.js';
 
 export function createMessagesRouter(io) {
   const router = express.Router();
@@ -66,14 +67,14 @@ const upload = multer({
     fileSize: 100 * 1024 * 1024 // 100MB max (WhatsApp limit: 16MB for most, 100MB for documents)
   },
   fileFilter: (req, file, cb) => {
-    // WhatsApp supported media types
+    // WhatsApp supported media types + audio/webm (will be auto-converted to audio/ogg)
     const allowedTypes = [
       // Images
       'image/jpeg', 'image/png', 'image/webp',
       // Videos
       'video/mp4', 'video/3gpp',
-      // Audio (WhatsApp Cloud API does NOT support audio/webm - frontend must convert to audio/ogg or audio/mp4)
-      'audio/aac', 'audio/mp4', 'audio/mpeg', 'audio/amr', 'audio/ogg',
+      // Audio (audio/webm will be auto-converted to audio/ogg with Opus codec)
+      'audio/aac', 'audio/mp4', 'audio/mpeg', 'audio/amr', 'audio/ogg', 'audio/webm',
       // Documents
       'application/pdf', 'application/vnd.ms-powerpoint', 'application/msword',
       'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -85,12 +86,7 @@ const upload = multer({
     if (allowedTypes.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      // Provide helpful error message for common unsupported formats
-      if (file.mimetype === 'audio/webm') {
-        cb(new Error('WhatsApp does not support audio/webm format. Please convert to audio/ogg (recommended) or audio/mp4 before uploading.'), false);
-      } else {
-        cb(new Error(`Unsupported media type for WhatsApp: ${file.mimetype}. Supported audio formats: aac, mp4, mpeg, amr, ogg`), false);
-      }
+      cb(new Error(`Unsupported media type for WhatsApp: ${file.mimetype}. Supported audio formats: aac, mp4, mpeg, amr, ogg, webm (auto-converted)`), false);
     }
   }
 });
@@ -956,14 +952,55 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
     else if (mimetype.startsWith('audio/')) mediaType = 'audio';
     else mediaType = 'document';
 
+    // Auto-convert unsupported audio formats to OGG (Opus codec)
+    let processedBuffer = buffer;
+    let processedMimetype = mimetype;
+    let processedFilename = originalname;
+    let conversionPerformed = false;
+
+    if (mediaType === 'audio' && needsAudioConversion(mimetype)) {
+      logger.info({ 
+        originalFormat: mimetype,
+        originalSize: buffer.length,
+        filename: originalname
+      }, '🔄 Audio format not supported by WhatsApp - converting to OGG (Opus codec)');
+
+      try {
+        const ffmpegFormat = getFFmpegFormat(mimetype);
+        processedBuffer = await convertAudioToOgg(buffer, ffmpegFormat);
+        processedMimetype = 'audio/ogg';
+        processedFilename = originalname.replace(/\.[^.]+$/, '.ogg');
+        conversionPerformed = true;
+
+        logger.info({ 
+          originalFormat: mimetype,
+          originalSize: buffer.length,
+          convertedFormat: processedMimetype,
+          convertedSize: processedBuffer.length,
+          compressionRatio: ((1 - processedBuffer.length / buffer.length) * 100).toFixed(2) + '%',
+          newFilename: processedFilename
+        }, '✅ Audio conversion successful');
+
+      } catch (conversionErr) {
+        logger.error({ 
+          err: conversionErr, 
+          mimetype, 
+          filename: originalname 
+        }, '❌ Audio conversion failed - rejecting upload');
+        
+        throw new Error(`Audio conversion failed: ${conversionErr.message}. Original format: ${mimetype}`);
+      }
+    }
+
     // Ensure room exists (1 room = 1 phone number)
     const mediaRoomId = await ensureRoomAndGetId(cleanPhone);
     
     logger.info({ 
       to: cleanPhone, 
-      filename: originalname, 
-      size: buffer.length, 
-      mimetype 
+      filename: processedFilename, 
+      size: processedBuffer.length, 
+      mimetype: processedMimetype,
+      conversionPerformed 
     }, 'Starting combined media flow');
 
     let supabaseStorage, messageId, waUpload, sendResult;
@@ -971,9 +1008,9 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
     try {
       // 1) Upload to Supabase Storage (organized by phone/date)
       supabaseStorage = await uploadToStorage({
-        buffer,
-        filename: originalname,
-        contentType: mimetype,
+        buffer: processedBuffer, // Use converted buffer if conversion was performed
+        filename: processedFilename, // Use new filename (.ogg) if converted
+        contentType: processedMimetype, // Use audio/ogg if converted
         folder: 'whatsapp-media',
         roomId: cleanPhone,
         phoneNumber: cleanPhone
@@ -982,35 +1019,41 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
       logger.info({ 
         filename: supabaseStorage.gcsFilename,
         url: supabaseStorage.url,
-        size: supabaseStorage.size 
+        size: supabaseStorage.size,
+        converted: conversionPerformed
       }, 'Media uploaded to Supabase Storage successfully');
 
     } catch (storageErr) {
-      logger.error({ err: storageErr, filename: originalname }, 'Failed to upload to Supabase Storage');
+      logger.error({ err: storageErr, filename: processedFilename }, 'Failed to upload to Supabase Storage');
       throw new Error(`Storage upload failed: ${storageErr.message}`);
     }
 
     try {
       // 2) Upload media to WhatsApp to obtain media ID first
       waUpload = await uploadMediaToWhatsApp({
-        buffer,
-        filename: originalname,
-        mimeType: mimetype
+        buffer: processedBuffer, // Use converted buffer
+        filename: processedFilename, // Use converted filename
+        mimeType: processedMimetype // Use converted MIME type
       });
       
-      logger.info({ mediaId: waUpload.id, filename: originalname }, 'Media uploaded to WhatsApp successfully');
+      logger.info({ 
+        mediaId: waUpload.id, 
+        filename: processedFilename,
+        converted: conversionPerformed
+      }, 'Media uploaded to WhatsApp successfully');
 
       // 3) Send WhatsApp message using media ID
       sendResult = await sendMediaMessage(cleanPhone, mediaType, waUpload.id, {
         caption: caption || '',
-        filename: originalname
+        filename: processedFilename // Use converted filename
       });
       const waMessageId = sendResult.messages?.[0]?.id || null;
       
       logger.info({ 
         waMessageId, 
         mediaId: waUpload.id,
-        to: cleanPhone
+        to: cleanPhone,
+        converted: conversionPerformed
       }, 'WhatsApp message sent successfully');
 
       // 4) Create DB row with ALL data at once (optimized - single query)
@@ -1021,9 +1064,19 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
         filename: originalname,
         upload_step: 'complete',
         whatsapp_media_id: waUpload.id,
-        whatsapp_message_id: waMessageId
+        whatsapp_message_id: waMessageId,
+        ...(conversionPerformed && {
+          audio_conversion: {
+            original_format: mimetype,
+            original_filename: originalname,
+            original_size: buffer.length,
+            converted_format: processedMimetype,
+            converted_filename: processedFilename,
+            converted_size: processedBuffer.length
+          }
+        })
       };
-      const storedName = (supabaseStorage.gcsFilename || '').split('/').pop() || originalname;
+      const storedName = (supabaseStorage.gcsFilename || '').split('/').pop() || processedFilename;
       
       const messageData = {
         id: messageId,
@@ -1036,7 +1089,7 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
         gcs_filename: supabaseStorage.gcsFilename,
         gcs_url: supabaseStorage.url,
         file_size: supabaseStorage.size,
-        mime_type: mimetype,
+        mime_type: processedMimetype, // Store converted MIME type
         original_filename: storedName,
         wa_message_id: waMessageId, // Already have message ID
         reply_to_wa_message_id: null,
@@ -1070,7 +1123,7 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
           gcs_filename: supabaseStorage.gcsFilename,
           gcs_url: supabaseStorage.url,
           file_size: supabaseStorage.size,
-          mime_type: mimetype,
+          mime_type: processedMimetype, // Use converted MIME type
           original_filename: storedName,
           wa_message_id: waMessageId,
           status: 'sent',
@@ -1095,20 +1148,41 @@ router.post('/send-media-combined', upload.single('media'), async (req, res) => 
         mediaId: waUpload.id,
         waMessageId,
         gcsFilename: supabaseStorage.gcsFilename,
-        messageId
+        messageId,
+        audioConverted: conversionPerformed,
+        ...(conversionPerformed && {
+          conversion: {
+            from: mimetype,
+            to: processedMimetype,
+            originalSize: buffer.length,
+            convertedSize: processedBuffer.length
+          }
+        })
       }, 'Combined media flow completed successfully');
 
       return res.json({
         success: true,
         to: cleanPhone,
         mediaType,
-        filename: originalname,
-        size: buffer.length,
+        filename: processedFilename, // Return converted filename
+        size: processedBuffer.length, // Return converted size
         message_id: messageId,
         whatsapp_media_id: waUpload.id,
         whatsapp_message_id: waMessageId,
         storage_url: supabaseStorage.url,
-        storage_filename: supabaseStorage.gcsFilename
+        storage_filename: supabaseStorage.gcsFilename,
+        ...(conversionPerformed && {
+          audio_conversion: {
+            performed: true,
+            original_format: mimetype,
+            original_filename: originalname,
+            original_size: buffer.length,
+            converted_format: processedMimetype,
+            converted_filename: processedFilename,
+            converted_size: processedBuffer.length,
+            compression_ratio: ((1 - processedBuffer.length / buffer.length) * 100).toFixed(2) + '%'
+          }
+        })
       });
 
     } catch (waErr) {
