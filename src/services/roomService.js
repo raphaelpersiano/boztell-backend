@@ -91,34 +91,16 @@ export async function ensureRoom(phone, metadata = {}, io = null) {
       autoCreatedLead: !metadata.leads_id && leadsId
     }, 'New room created successfully with lead relationship');
     
-    // Broadcast new room to all connected clients (for real-time room list updates)
-    if (io) {
-      // Prepare complete room data for frontend (like WhatsApp)
-      const newRoomPayload = {
-        room_id: newRoom.id,
-        room_phone: newRoom.phone,
-        room_title: newRoom.title,
-        room_created_at: newRoom.created_at,
-        room_updated_at: newRoom.updated_at,
-        leads_info: leadsId ? {
-          id: leadsId,
-          phone: phone,
-          name: metadata.customer_name || `Customer ${phone}`
-        } : null,
-        unread_count: 0,
-        last_message: null,
-        participants: []
-      };
-      
-      // Emit global event for all agents/admins to see new room appear
-      io.emit('new_room', newRoomPayload);
-      
-      logger.info({ 
-        roomId: newRoom.id, 
-        phone,
-        title: roomTitle
-      }, '📡 Emitting new_room event - room will appear in real-time');
-    }
+    // NOTE: We don't emit 'new_room' event here anymore
+    // Instead, we'll emit 'new_room_complete' from messageService after first message
+    // This prevents race condition where room appears without last_message data
+    
+    logger.info({ 
+      roomId: newRoom.id, 
+      phone,
+      title: roomTitle,
+      note: 'Room created, waiting for first message to emit socket event'
+    }, '📡 Room ready for first message event');
     
     return newRoom;
     
