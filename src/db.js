@@ -384,6 +384,8 @@ export async function getRoomsByUser(userId) {
   // Get last message for each room using SQL window function for better performance
   const roomIds = data?.map(item => item.rooms.id) || [];
   let lastMessages = {};
+  // Compute participant counts for each room (room_participants)
+  let participantCounts = {};
   
   if (roomIds.length > 0) {
     // Use PostgreSQL DISTINCT ON to get latest message per room efficiently
@@ -423,6 +425,22 @@ export async function getRoomsByUser(userId) {
         };
       });
     }
+    
+    // Also compute participant counts for these rooms
+    try {
+      const { data: participantsData, error: participantsError } = await supabase
+        .from('room_participants')
+        .select('room_id')
+        .in('room_id', roomIds);
+
+      if (!participantsError && participantsData) {
+        participantsData.forEach(p => {
+          participantCounts[p.room_id] = (participantCounts[p.room_id] || 0) + 1;
+        });
+      }
+    } catch (pcErr) {
+      logger.warn({ err: pcErr }, 'Failed to compute participant counts for rooms');
+    }
   }
   
   // Transform data structure untuk response yang clean
@@ -434,6 +452,7 @@ export async function getRoomsByUser(userId) {
     room_updated_at: item.rooms.updated_at,
     leads_id: item.rooms.leads_id || null,
     participant_joined_at: item.joined_at,
+    participant_count: participantCounts[item.rooms.id] || 0,
     last_message: lastMessages[item.rooms.id]?.content_text || null,
     last_message_at: lastMessages[item.rooms.id]?.created_at || null,
     is_assigned: true, // Always true for getRoomsByUser (user is participant)
