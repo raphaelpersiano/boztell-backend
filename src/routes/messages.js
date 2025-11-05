@@ -1690,53 +1690,18 @@ router.post('/send-template', async (req, res) => {
       // Don't throw error here since WhatsApp message was sent successfully
     }
 
-    // Emit Socket.IO event for template message
-    if (io) {
-      const messagePayload = {
-        id: messageId,
-        room_id: templateFullRoomId,
-        user_id: validatedUserId,
-        content_type: 'template',
-        content_text: `Template: ${templateName}${parameters.length > 0 ? ` (${parameters.join(', ')})` : ''}`,
-        wa_message_id: waMessageId || null,
-        status: 'sent',
-        status_timestamp: messageData.created_at,
-        reply_to_wa_message_id: replyTo || null,
-        reaction_emoji: null,
-        reaction_to_wa_message_id: null,
-        media_type: null,
-        media_id: null,
-        gcs_filename: null,
-        gcs_url: null,
-        file_size: null,
-        mime_type: null,
-        original_filename: null,
-        metadata: templateMeta,
-        created_at: messageData.created_at,
-        updated_at: messageData.created_at
-      };
-      
-      io.to(`room:${templateFullRoomId}`).emit('room:new_message', messagePayload);
-      io.emit('new_message', messagePayload);
-      
-      logger.info({ 
-        messageId, 
-        roomId: templateFullRoomId,
-        templateName,
-        userId: validatedUserId
-      }, '📡 Emitting new_message events for template message');
-    }
-
-    // Auto-assign room to agent if user role is 'agent' (AFTER everything else succeeded)
+    // Auto-assign room to agent if user role is 'agent' (non-blocking, runs in background)
+    // This MUST run BEFORE Socket.IO emit so frontend gets updated participant list
     const { getUserById, checkRoomParticipant, addRoomParticipant } = await import('../db.js');
     
+    // Run auto-assign synchronously to ensure it completes before response
     try {
       // Get user info to check role
       const userResult = await getUserById(validatedUserId);
       if (userResult && userResult.rows && userResult.rows.length > 0) {
         const user = userResult.rows[0];
         
-        // If user is agent, auto-assign room
+        // ONLY auto-assign if user role is 'agent' (not admin/supervisor)
         if (user.role === 'agent') {
           // Check if agent already assigned to this room
           const participantCheck = await checkRoomParticipant(templateFullRoomId, validatedUserId);
@@ -1778,6 +1743,43 @@ router.post('/send-template', async (req, res) => {
         room_id: templateFullRoomId,
         user_id: validatedUserId
       }, '⚠️ Failed to auto-assign agent to room (non-critical error)');
+    }
+
+    // Emit Socket.IO event for template message (AFTER auto-assign completes)
+    if (io) {
+      const messagePayload = {
+        id: messageId,
+        room_id: templateFullRoomId,
+        user_id: validatedUserId,
+        content_type: 'template',
+        content_text: `Template: ${templateName}${parameters.length > 0 ? ` (${parameters.join(', ')})` : ''}`,
+        wa_message_id: waMessageId || null,
+        status: 'sent',
+        status_timestamp: messageData.created_at,
+        reply_to_wa_message_id: replyTo || null,
+        reaction_emoji: null,
+        reaction_to_wa_message_id: null,
+        media_type: null,
+        media_id: null,
+        gcs_filename: null,
+        gcs_url: null,
+        file_size: null,
+        mime_type: null,
+        original_filename: null,
+        metadata: templateMeta,
+        created_at: messageData.created_at,
+        updated_at: messageData.created_at
+      };
+      
+      io.to(`room:${templateFullRoomId}`).emit('room:new_message', messagePayload);
+      io.emit('new_message', messagePayload);
+      
+      logger.info({ 
+        messageId, 
+        roomId: templateFullRoomId,
+        templateName,
+        userId: validatedUserId
+      }, '📡 Emitting new_message events for template message');
     }
 
     logger.info({ 
