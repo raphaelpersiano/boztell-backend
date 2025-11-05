@@ -6,39 +6,69 @@ const router = express.Router();
 
 /**
  * Get all rooms or rooms by user_id
- * - Query param: user_id (optional) - filter rooms for specific agent
- * - If user_id provided: returns rooms from room_participants (agent's assigned rooms)
- * - If no user_id: returns all rooms (for admin/supervisor)
+ * - Query param: user_id (optional) - filter rooms based on user role
+ * - If user_id provided AND role = 'agent': returns rooms from room_participants (assigned rooms only)
+ * - If user_id provided AND role = 'admin'/'supervisor': returns ALL rooms
+ * - If no user_id: returns all rooms (public access)
  */
 router.get('/', async (req, res) => {
   try {
     const { user_id } = req.query;
 
-    // If user_id provided, get only rooms assigned to that user (agent role)
+    // If user_id provided, check user role first
     if (user_id) {
-      const result = await getRoomsByUser(user_id);
+      const { getUserById } = await import('../db.js');
       
-      logger.info('Accessed rooms by user_id', {
-        user_id,
-        roomCount: result.rowCount
-      });
-
-      return res.json({
-        success: true,
-        data: {
-          rooms: result.rows,
-          total_count: result.rowCount,
-          filtered_by: 'user_id',
+      // Get user info to check role
+      const userResult = await getUserById(user_id);
+      
+      if (!userResult || !userResult.rows || userResult.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          error: 'User not found',
           user_id
-        }
+        });
+      }
+      
+      const user = userResult.rows[0];
+      
+      // If user is agent, get only assigned rooms from room_participants
+      if (user.role === 'agent') {
+        const result = await getRoomsByUser(user_id);
+        
+        logger.info('Agent accessed assigned rooms', {
+          user_id,
+          user_name: user.name,
+          user_role: user.role,
+          roomCount: result.rowCount
+        });
+
+        return res.json({
+          success: true,
+          data: {
+            rooms: result.rows,
+            total_count: result.rowCount,
+            filtered_by: 'agent_assigned_rooms',
+            user_id,
+            user_role: user.role
+          }
+        });
+      }
+      
+      // If user is admin/supervisor, return ALL rooms (ignore room_participants)
+      logger.info('Admin/Supervisor accessed all rooms', {
+        user_id,
+        user_name: user.name,
+        user_role: user.role
       });
     }
 
-    // No filter: get all rooms (admin/supervisor view)
+    // No filter OR admin/supervisor: get all rooms
     const result = await getAllRoomsWithDetails();
     const rooms = result.rows;
     
     logger.info('Accessed all rooms', {
+      user_id: user_id || 'none',
       roomCount: result.rowCount
     });
 
@@ -46,7 +76,8 @@ router.get('/', async (req, res) => {
       success: true,
       data: {
         rooms: rooms,
-        total_count: result.rowCount
+        total_count: result.rowCount,
+        filtered_by: user_id ? 'admin_all_rooms' : 'public_all_rooms'
       }
     });
 

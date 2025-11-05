@@ -1589,59 +1589,6 @@ router.post('/send-template', async (req, res) => {
       }, '🆕 Created new room for new customer (template message)');
     }
 
-    // Auto-assign room to agent if user role is 'agent'
-    const { getUserById, checkRoomParticipant, addRoomParticipant } = await import('../db.js');
-    
-    try {
-      // Get user info to check role
-      const userResult = await getUserById(validatedUserId);
-      if (userResult && userResult.rows && userResult.rows.length > 0) {
-        const user = userResult.rows[0];
-        
-        // If user is agent, auto-assign room
-        if (user.role === 'agent') {
-          // Check if agent already assigned to this room
-          const participantCheck = await checkRoomParticipant(templateFullRoomId, validatedUserId);
-          const isAlreadyAssigned = participantCheck.rows.length > 0;
-          
-          if (!isAlreadyAssigned) {
-            // Add agent as room participant
-            await addRoomParticipant({
-              room_id: templateFullRoomId,
-              user_id: validatedUserId,
-              joined_at: new Date().toISOString()
-            });
-            
-            logger.info({ 
-              room_id: templateFullRoomId,
-              user_id: validatedUserId,
-              user_name: user.name,
-              user_role: user.role,
-              action: 'auto_assign_agent_to_room'
-            }, '✅ Auto-assigned agent to room for template message');
-          } else {
-            logger.info({ 
-              room_id: templateFullRoomId,
-              user_id: validatedUserId,
-              user_name: user.name
-            }, '✓ Agent already assigned to room');
-          }
-        } else {
-          logger.info({ 
-            user_id: validatedUserId,
-            user_role: user.role
-          }, `ℹ️ User role is '${user.role}' - skipping auto-assignment (only agents are auto-assigned)`);
-        }
-      }
-    } catch (assignErr) {
-      // Don't fail the whole request if assignment fails
-      logger.error({ 
-        err: assignErr, 
-        room_id: templateFullRoomId,
-        user_id: validatedUserId
-      }, '⚠️ Failed to auto-assign agent to room (non-critical error)');
-    }
-
     // Send template message first
     let result;
     try {
@@ -1778,6 +1725,59 @@ router.post('/send-template', async (req, res) => {
         templateName,
         userId: validatedUserId
       }, '📡 Emitting new_message events for template message');
+    }
+
+    // Auto-assign room to agent if user role is 'agent' (AFTER everything else succeeded)
+    const { getUserById, checkRoomParticipant, addRoomParticipant } = await import('../db.js');
+    
+    try {
+      // Get user info to check role
+      const userResult = await getUserById(validatedUserId);
+      if (userResult && userResult.rows && userResult.rows.length > 0) {
+        const user = userResult.rows[0];
+        
+        // If user is agent, auto-assign room
+        if (user.role === 'agent') {
+          // Check if agent already assigned to this room
+          const participantCheck = await checkRoomParticipant(templateFullRoomId, validatedUserId);
+          const isAlreadyAssigned = participantCheck.rows.length > 0;
+          
+          if (!isAlreadyAssigned) {
+            // Add agent as room participant
+            await addRoomParticipant({
+              room_id: templateFullRoomId,
+              user_id: validatedUserId,
+              joined_at: new Date().toISOString()
+            });
+            
+            logger.info({ 
+              room_id: templateFullRoomId,
+              user_id: validatedUserId,
+              user_name: user.name,
+              user_role: user.role,
+              action: 'auto_assign_agent_to_room'
+            }, '✅ Auto-assigned agent to room for template message');
+          } else {
+            logger.info({ 
+              room_id: templateFullRoomId,
+              user_id: validatedUserId,
+              user_name: user.name
+            }, '✓ Agent already assigned to room');
+          }
+        } else {
+          logger.info({ 
+            user_id: validatedUserId,
+            user_role: user.role
+          }, `ℹ️ User role is '${user.role}' - skipping auto-assignment (only agents are auto-assigned)`);
+        }
+      }
+    } catch (assignErr) {
+      // Don't fail the whole request if assignment fails
+      logger.error({ 
+        err: assignErr, 
+        room_id: templateFullRoomId,
+        user_id: validatedUserId
+      }, '⚠️ Failed to auto-assign agent to room (non-critical error)');
     }
 
     logger.info({ 
