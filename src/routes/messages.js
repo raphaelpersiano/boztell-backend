@@ -1513,24 +1513,133 @@ router.post('/send-template', async (req, res) => {
     
     const cleanPhone = validateWhatsAppPhoneNumber(to);
     
-    // Handle room_id: Use provided OR create new room for new customer
+    // Handle room_id: Use provided OR create new room + lead for new customer
     let templateFullRoomId;
+    let roomCreated = false;
+    let leadsId = null;
+    
     if (room_id) {
       // Use existing room from frontend
       templateFullRoomId = room_id;
       logger.info({ room_id, to: cleanPhone }, '📦 Using existing room_id from frontend');
     } else {
-      // Create new room for new customer
+      // Create new lead + room for new customer
+      const { getLeads, insertLead } = await import('../db.js');
+      
+      try {
+        // 1. Check if lead already exists for this phone
+        const existingLeadResult = await getLeads({ phone: cleanPhone });
+        
+        if (existingLeadResult && existingLeadResult.rows && existingLeadResult.rows.length > 0) {
+          // Lead exists, use existing lead ID
+          leadsId = existingLeadResult.rows[0].id;
+          logger.info({ 
+            phone: cleanPhone, 
+            leadsId,
+            leadName: existingLeadResult.rows[0].name
+          }, '📋 Using existing lead for template message');
+        } else {
+          // 2. Create new lead first
+          const newLeadData = {
+            name: `Customer ${cleanPhone}`,
+            phone: cleanPhone,
+            outstanding: 0,
+            loan_type: 'personal_loan',
+            leads_status: 'cold',
+            contact_status: 'not_contacted', // Will be updated to 'contacted' when they reply
+            utm_id: null,
+            created_at: new Date().toISOString()
+          };
+          
+          const newLeadResult = await insertLead(newLeadData);
+          
+          if (newLeadResult && newLeadResult.rows && newLeadResult.rows.length > 0) {
+            leadsId = newLeadResult.rows[0].id;
+            logger.info({ 
+              phone: cleanPhone, 
+              leadsId,
+              leadData: newLeadData
+            }, '✅ New lead created for template message');
+          } else {
+            logger.warn({ phone: cleanPhone }, '⚠️ Failed to create lead, proceeding without leads_id');
+          }
+        }
+      } catch (leadErr) {
+        logger.error({ 
+          err: leadErr, 
+          phone: cleanPhone 
+        }, '❌ Error handling lead creation, proceeding without leads_id');
+      }
+      
+      // 3. Create new room with leads_id
       templateFullRoomId = await ensureRoomAndGetId(cleanPhone, { 
         phone: cleanPhone,
+        leads_id: leadsId, // Pass leads_id to room creation
         source: 'template_message',
-        template_name: templateName
+        template_name: templateName,
+        title: 'Personal'
       });
+      roomCreated = true;
+      
       logger.info({ 
         room_id: templateFullRoomId, 
+        leads_id: leadsId,
         to: cleanPhone,
         templateName 
       }, '🆕 Created new room for new customer (template message)');
+    }
+
+    // Auto-assign room to agent if user role is 'agent'
+    const { getUserById, checkRoomParticipant, addRoomParticipant } = await import('../db.js');
+    
+    try {
+      // Get user info to check role
+      const userResult = await getUserById(validatedUserId);
+      if (userResult && userResult.rows && userResult.rows.length > 0) {
+        const user = userResult.rows[0];
+        
+        // If user is agent, auto-assign room
+        if (user.role === 'agent') {
+          // Check if agent already assigned to this room
+          const participantCheck = await checkRoomParticipant(templateFullRoomId, validatedUserId);
+          const isAlreadyAssigned = participantCheck.rows.length > 0;
+          
+          if (!isAlreadyAssigned) {
+            // Add agent as room participant
+            await addRoomParticipant({
+              room_id: templateFullRoomId,
+              user_id: validatedUserId,
+              joined_at: new Date().toISOString()
+            });
+            
+            logger.info({ 
+              room_id: templateFullRoomId,
+              user_id: validatedUserId,
+              user_name: user.name,
+              user_role: user.role,
+              action: 'auto_assign_agent_to_room'
+            }, '✅ Auto-assigned agent to room for template message');
+          } else {
+            logger.info({ 
+              room_id: templateFullRoomId,
+              user_id: validatedUserId,
+              user_name: user.name
+            }, '✓ Agent already assigned to room');
+          }
+        } else {
+          logger.info({ 
+            user_id: validatedUserId,
+            user_role: user.role
+          }, `ℹ️ User role is '${user.role}' - skipping auto-assignment (only agents are auto-assigned)`);
+        }
+      }
+    } catch (assignErr) {
+      // Don't fail the whole request if assignment fails
+      logger.error({ 
+        err: assignErr, 
+        room_id: templateFullRoomId,
+        user_id: validatedUserId
+      }, '⚠️ Failed to auto-assign agent to room (non-critical error)');
     }
 
     // Send template message first

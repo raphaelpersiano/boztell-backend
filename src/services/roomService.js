@@ -20,7 +20,7 @@ export async function ensureRoom(phone, metadata = {}, io = null) {
       return existingResult.rows[0];
     }
     
-    // Check if lead exists for this phone number, create if not exists
+    // Use leads_id from metadata if provided, otherwise try to find/create lead
     let leadsId = metadata.leads_id || null;
     
     if (!leadsId) {
@@ -43,7 +43,8 @@ export async function ensureRoom(phone, metadata = {}, io = null) {
             outstanding: 0,
             loan_type: metadata.loan_type || 'personal_loan',
             leads_status: 'cold',
-            contact_status: 'contacted' // Since they're contacting via WhatsApp
+            contact_status: 'not_contacted', // Will be updated when customer replies
+            utm_id: null
           };
           
           const newLeadResult = await insertLead(leadData);
@@ -61,6 +62,8 @@ export async function ensureRoom(phone, metadata = {}, io = null) {
         logger.warn({ err: leadErr, phone }, 'Failed to ensure lead exists, proceeding without leads_id');
         // Continue without leads_id - room can exist without lead relationship
       }
+    } else {
+      logger.debug({ phone, leadsId }, 'Using leads_id provided in metadata');
     }
     
     // Create new room with UUID id
