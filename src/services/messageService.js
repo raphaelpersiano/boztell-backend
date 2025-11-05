@@ -20,6 +20,11 @@ export async function handleIncomingMessage({ io }, input) {
   try {
     // Note: input.room_id is already the actual room UUID from webhook handler
     
+    // 1. Check if this is the first message in the room (for new_room_complete event)
+    const { getMessagesByRoom } = await import('../db.js');
+    const existingMessagesResult = await getMessagesByRoom(input.room_id);
+    const isFirstMessage = !existingMessagesResult || existingMessagesResult.rows.length === 0;
+    
     // 2. Save message to database
     const id = uuidv4();
   const replyTo = input.metadata?.reply_to || null;
@@ -91,20 +96,79 @@ export async function handleIncomingMessage({ io }, input) {
       updated_at: message.updated_at
     };
     
-    // Emit to room-specific channel (best practice for scalability)
+    // 3a. If this is the first message, emit new_room_complete event
+    if (isFirstMessage && io) {
+      try {
+        // Get full room details with leads info
+        const { getAllRoomsWithDetails } = await import('../db.js');
+        const allRoomsResult = await getAllRoomsWithDetails();
+        const roomDetail = allRoomsResult.rows.find(r => r.room_id === input.room_id);
+        
+        if (roomDetail) {
+          const newRoomCompletePayload = {
+            // Room data
+            room_id: roomDetail.room_id,
+            room_phone: roomDetail.room_phone,
+            room_title: roomDetail.room_title || 'Personal',
+            room_created_at: roomDetail.room_created_at,
+            room_updated_at: roomDetail.room_updated_at,
+            
+            // Full leads info
+            leads_id: roomDetail.leads_id || null,
+            leads_info: roomDetail.leads_info || null,
+            
+            // First message as last_message
+            last_message: {
+              id: message.id,
+              content_text: message.content_text,
+              content_type: message.content_type,
+              created_at: message.created_at,
+              user_id: message.user_id,
+              wa_message_id: message.wa_message_id
+            },
+            last_message_text: message.content_text,
+            last_message_timestamp: message.created_at,
+            last_message_type: message.content_type,
+            
+            // Counts
+            unread_count: 1,
+            message_count: 1,
+            
+            // Participants
+            participants: roomDetail.participants || []
+          };
+          
+          // Emit global event for all agents/admins to see new room with complete data
+          io.emit('new_room_complete', newRoomCompletePayload);
+          
+          logger.info({ 
+            roomId: input.room_id,
+            phone: roomDetail.room_phone,
+            customerName: roomDetail.leads_info?.name || roomDetail.room_title,
+            firstMessageText: message.content_text
+          }, '📡 Emitting new_room_complete event - new room with full data');
+        }
+      } catch (err) {
+        logger.error({ err, roomId: input.room_id }, 'Failed to emit new_room_complete event');
+        // Continue even if this fails - message will still be saved and other events emitted
+      }
+    }
+    
+    // 3b. Emit to room-specific channel (best practice for scalability)
     io.to(`room:${input.room_id}`).emit('room:new_message', messagePayload);
     
-    // ALSO emit global event for backward compatibility with frontend
+    // 3c. ALSO emit global event for existing rooms (backward compatibility)
     // Frontend expects message object directly, not wrapped
     io.emit('new_message', messagePayload);
     
     logger.info({ 
       messageId: message.id,
       roomId: input.room_id,
+      isFirstMessage,
       hasId: !!messagePayload.id,
       socketPayloadKeys: Object.keys(messagePayload),
-      events: ['room:new_message', 'new_message']
-    }, '📡 Emitting new_message events via Socket.IO');
+      events: isFirstMessage ? ['new_room_complete', 'room:new_message', 'new_message'] : ['room:new_message', 'new_message']
+    }, '📡 Emitting message events via Socket.IO');
 
     // 4. Send push notifications to participants
     await sendPushNotifications(input.room_id, {
