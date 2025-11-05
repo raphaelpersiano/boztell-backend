@@ -381,27 +381,46 @@ export async function getRoomsByUser(userId) {
     throw new Error(`Get rooms by user failed: ${error.message}`);
   }
   
-  // Get last message for each room
+  // Get last message for each room using SQL window function for better performance
   const roomIds = data?.map(item => item.rooms.id) || [];
   let lastMessages = {};
   
   if (roomIds.length > 0) {
-    // Get the latest message for each room
-    const { data: messagesData, error: messagesError } = await supabase
-      .from('messages')
-      .select('room_id, content_text, created_at')
-      .in('room_id', roomIds)
-      .order('created_at', { ascending: false });
+    // Use PostgreSQL DISTINCT ON to get latest message per room efficiently
+    const { data: messagesData, error: messagesError } = await supabase.rpc('get_latest_messages_for_rooms', {
+      room_ids: roomIds
+    });
     
-    if (!messagesError && messagesData) {
-      // Group by room_id and get the first (latest) message for each room
+    // Fallback to manual grouping if RPC not available
+    if (messagesError || !messagesData) {
+      logger.warn('RPC not available, using fallback query for last messages');
+      
+      const { data: allMessages, error: fallbackError } = await supabase
+        .from('messages')
+        .select('room_id, content_text, content_type, created_at')
+        .in('room_id', roomIds)
+        .order('created_at', { ascending: false });
+      
+      if (!fallbackError && allMessages) {
+        // Group by room_id and get the first (latest) message for each room
+        allMessages.forEach(msg => {
+          if (!lastMessages[msg.room_id]) {
+            lastMessages[msg.room_id] = {
+              content_text: msg.content_text,
+              content_type: msg.content_type,
+              created_at: msg.created_at
+            };
+          }
+        });
+      }
+    } else {
+      // Use RPC result
       messagesData.forEach(msg => {
-        if (!lastMessages[msg.room_id]) {
-          lastMessages[msg.room_id] = {
-            content_text: msg.content_text,
-            created_at: msg.created_at
-          };
-        }
+        lastMessages[msg.room_id] = {
+          content_text: msg.content_text,
+          content_type: msg.content_type,
+          created_at: msg.created_at
+        };
       });
     }
   }
@@ -488,27 +507,46 @@ export async function getAllRoomsWithDetails() {
     }, 'Debug: room_participants structure in getAllRoomsWithDetails');
   }
   
-  // Get last message for each room
+  // Get last message for each room using SQL window function for better performance
   const roomIds = data?.map(room => room.id) || [];
   let lastMessages = {};
   
   if (roomIds.length > 0) {
-    // Get the latest message for each room
-    const { data: messagesData, error: messagesError } = await supabase
-      .from('messages')
-      .select('room_id, content_text, created_at')
-      .in('room_id', roomIds)
-      .order('created_at', { ascending: false });
+    // Use PostgreSQL DISTINCT ON to get latest message per room efficiently
+    const { data: messagesData, error: messagesError } = await supabase.rpc('get_latest_messages_for_rooms', {
+      room_ids: roomIds
+    });
     
-    if (!messagesError && messagesData) {
-      // Group by room_id and get the first (latest) message for each room
+    // Fallback to manual grouping if RPC not available
+    if (messagesError || !messagesData) {
+      logger.warn('RPC not available, using fallback query for last messages');
+      
+      const { data: allMessages, error: fallbackError } = await supabase
+        .from('messages')
+        .select('room_id, content_text, content_type, created_at')
+        .in('room_id', roomIds)
+        .order('created_at', { ascending: false });
+      
+      if (!fallbackError && allMessages) {
+        // Group by room_id and get the first (latest) message for each room
+        allMessages.forEach(msg => {
+          if (!lastMessages[msg.room_id]) {
+            lastMessages[msg.room_id] = {
+              content_text: msg.content_text,
+              content_type: msg.content_type,
+              created_at: msg.created_at
+            };
+          }
+        });
+      }
+    } else {
+      // Use RPC result
       messagesData.forEach(msg => {
-        if (!lastMessages[msg.room_id]) {
-          lastMessages[msg.room_id] = {
-            content_text: msg.content_text,
-            created_at: msg.created_at
-          };
-        }
+        lastMessages[msg.room_id] = {
+          content_text: msg.content_text,
+          content_type: msg.content_type,
+          created_at: msg.created_at
+        };
       });
     }
   }
