@@ -426,20 +426,47 @@ export async function getRoomsByUser(userId) {
       });
     }
     
-    // Also compute participant counts for these rooms
+    // Compute participant counts for these rooms using raw SQL for accuracy
     try {
+      // Use raw query to get exact COUNT(*) grouped by room_id
       const { data: participantsData, error: participantsError } = await supabase
-        .from('room_participants')
-        .select('room_id')
-        .in('room_id', roomIds);
+        .rpc('count_participants_by_room', { room_ids: roomIds });
+      
+      // Fallback: manual query if RPC not available
+      if (participantsError || !participantsData) {
+        logger.warn('RPC count_participants_by_room not available, using fallback query');
+        
+        // Get all participants for these rooms and count manually
+        const { data: allParticipants, error: fallbackError } = await supabase
+          .from('room_participants')
+          .select('room_id')
+          .in('room_id', roomIds);
 
-      if (!participantsError && participantsData) {
-        participantsData.forEach(p => {
-          participantCounts[p.room_id] = (participantCounts[p.room_id] || 0) + 1;
+        if (!fallbackError && allParticipants) {
+          // Count by room_id
+          allParticipants.forEach(p => {
+            participantCounts[p.room_id] = (participantCounts[p.room_id] || 0) + 1;
+          });
+          
+          logger.debug({ 
+            roomIds, 
+            participantCounts,
+            totalParticipants: allParticipants.length 
+          }, 'Computed participant counts (fallback)');
+        }
+      } else {
+        // Use RPC result: [{ room_id: 'xxx', count: 2 }, ...]
+        participantsData.forEach(item => {
+          participantCounts[item.room_id] = item.count;
         });
+        
+        logger.debug({ 
+          roomIds, 
+          participantCounts 
+        }, 'Computed participant counts (RPC)');
       }
     } catch (pcErr) {
-      logger.warn({ err: pcErr }, 'Failed to compute participant counts for rooms');
+      logger.error({ err: pcErr, roomIds }, 'Failed to compute participant counts for rooms');
     }
   }
   
