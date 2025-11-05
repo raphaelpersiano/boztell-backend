@@ -1592,7 +1592,16 @@ router.post('/send-template', async (req, res) => {
     // Send template message first
     let result;
     try {
+      logger.info({ 
+        to: cleanPhone,
+        templateName,
+        languageCode,
+        parameters,
+        user_id: validatedUserId
+      }, '🚀 Sending template message to WhatsApp...');
+      
       result = await sendTemplateMessage(cleanPhone, templateName, languageCode, parameters, { replyTo });
+      
       logger.info({ 
         templateName,
         fullResult: result,
@@ -1603,10 +1612,45 @@ router.post('/send-template', async (req, res) => {
         firstMessage: result?.messages?.[0],
         firstMessageType: typeof result?.messages?.[0],
         firstMessageKeys: result?.messages?.[0] ? Object.keys(result.messages[0]) : null
-      }, 'WhatsApp API full response analysis');
+      }, '✅ WhatsApp API response received');
     } catch (sendErr) {
-      logger.error({ err: sendErr, templateName, to: cleanPhone }, 'Failed to send template message to WhatsApp');
-      throw new Error(`WhatsApp send failed: ${sendErr.message}`);
+      logger.error({ 
+        err: sendErr,
+        errorMessage: sendErr.message,
+        errorStack: sendErr.stack,
+        templateName, 
+        to: cleanPhone,
+        languageCode,
+        parameters
+      }, '❌ Failed to send template message to WhatsApp');
+      
+      // Return detailed error to help debug
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to send template message to WhatsApp',
+        message: sendErr.message,
+        details: {
+          to: cleanPhone,
+          templateName,
+          languageCode,
+          parametersCount: parameters.length,
+          possible_causes: [
+            'Template does not exist in WhatsApp Business Manager',
+            'Template not approved yet',
+            'Template name or language code mismatch',
+            'Parameters count mismatch with template variables',
+            'WhatsApp API credentials invalid',
+            'Phone number not registered with WhatsApp Business API'
+          ],
+          troubleshooting_steps: [
+            `1. Check if template '${templateName}' exists: GET /messages/templates`,
+            '2. Verify template status is APPROVED in Meta Business Manager',
+            `3. Confirm language code '${languageCode}' matches template registration`,
+            `4. Verify parameters count (sent: ${parameters.length}) matches template variables`,
+            '5. Test with a simple template like "hello_world" first'
+          ]
+        }
+      });
     }
 
     const waMessageId = result.messages?.[0]?.id || null;
